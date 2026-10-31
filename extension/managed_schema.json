@@ -1,0 +1,101 @@
+{
+  "type": "object",
+  "properties": {
+    "orgId": {
+      "title": "Organization ID",
+      "description": "Organization identifier for IT alerting, for example org_ab12cd34ef56.",
+      "type": "string"
+    },
+    "userEmail": {
+      "title": "User email",
+      "description": "Employee email address attached to alerts for attribution.",
+      "type": "string"
+    },
+    "universalMode": {
+      "title": "Universal mode",
+      "description": "Scan every website for secrets, including sites outside the AI chat list.",
+      "type": "boolean"
+    },
+    "customPatterns": {
+      "title": "Custom patterns",
+      "description": "One regular expression per entry, matched against text about to be sent.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "lockSettings": {
+      "title": "Lock settings",
+      "description": "When true, protection stays on and the detection categories cannot be changed in the popup.",
+      "type": "boolean"
+    },
+    "detectPii": {
+      "title": "Detect personal data",
+      "description": "Enable personal-data detection (emails, phones, cards, national identity numbers for 20+ countries). Also available to employees through the popup.",
+      "type": "boolean"
+    },
+    "detectNetwork": {
+      "title": "Detect IP addresses",
+      "description": "Enable IP address detection. Also available to employees through the popup.",
+      "type": "boolean"
+    },
+    "enforceJustification": {
+      "title": "Enforce justification",
+      "description": "When true, sending after a warning requires a one-line reason that is shared with the IT admin.",
+      "type": "boolean"
+    },
+    "autoRedact": {
+      "title": "Auto-redact",
+      "description": "When true (Pro), high-confidence secrets are redacted automatically at send time.",
+      "type": "boolean"
+    },
+    "orgToken": {
+      "title": "Org token",
+      "description": "Ingest token for team alerts.",
+      "type": "string"
+    },
+    "blockSendAnyway": {
+      "title": "Block send anyway",
+      "description": "When true, sending after a warning is not allowed.",
+      "type": "boolean"
+    },
+    "alertOnWarn": {
+      "title": "Alert on warn",
+      "description": "Send an alert on every warning.",
+      "type": "boolean"
+    },
+    "alertOnSendAnyway": {
+      "title": "Alert on send anyway",
+      "description": "Send an alert when a user sends anyway.",
+      "type": "boolean"
+    },
+    "alertOnBlock": {
+      "title": "Alert on block",
+      "description": "Send an alert when a user cancels.",
+      "type": "boolean"
+    },
+    "alertOnRedact": {
+      "title": "Alert on redact",
+      "description": "Send an alert when a user redacts.",
+      "type": "boolean"
+    },
+    "heartbeat": {
+      "title": "Heartbeat",
+      "description": "Enable periodic heartbeat to the worker.",
+      "type": "boolean"
+    },
+    "extraSites": {
+      "title": "Extra sites",
+      "description": "Additional hostnames to scan.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "alertEndpoint": {
+      "title": "Alert endpoint",
+      "description": "Optional self-hosted alert endpoint URL.",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "extName": {
+    "message": "API Key Leak Intercept"
+  },
+  "extDescription": {
+    "message": "Stop pasting API keys into AI chats. Warns you before a secret or personal data leaves your browser. All detection runs locally."
+  }
+}

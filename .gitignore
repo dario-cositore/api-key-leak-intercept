@@ -1,0 +1,17 @@
+# The public tree holds the extension source only. The licensing service,
+# the console, the publishing notes and the store assets live in the private
+# repository; nothing below should ever appear here.
+backend/
+PUBLISHING.md
+DATA-FLOW.md
+INTERFACE.md
+docs/
+store-assets/
+/*.zip
+tests/entitlement.test.js
+tests/entitlement-state.test.js
+tests/managed-flow.test.js
+tests/manual.html
+tests/MANUAL_MATRIX.md
+.dev.vars
+.wrangler/

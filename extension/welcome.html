@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Welcome to API Key Leak Intercept</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+  :root {
+    --lime: #C6F24E;
+    --ink: #1D1D1F;
+    --canvas: #F5F5F7;
+    --muted: #636366;
+    --line: #D2D2D7;
+    --white: #FFFFFF;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--ink);
+    font: 15px/1.6 Geist, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 48px 24px 64px; }
+  .mark { display: inline-block; vertical-align: middle; margin-right: 12px; width: 34px; height: 20px; }
+  h1 {
+    font-size: 30px;
+    line-height: 1.2;
+    margin: 0 0 10px;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  .sub { margin: 0 0 28px; color: var(--muted); font-size: 16px; }
+  .sheet {
+    background: var(--white);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    padding: 28px;
+    margin: 0 0 20px;
+  }
+
+  /* the warning, mocked the way it looks on a chat page */
+  .mock {
+    background: #F1F1F4;
+    border-radius: 16px;
+    padding: 22px;
+    margin: 0 0 22px;
+    border: 1px solid var(--line);
+  }
+  .mock-dialog {
+    background: var(--white);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 18px 18px 16px;
+    box-shadow: 0 18px 40px rgba(29, 29, 31, 0.14);
+    max-width: 420px;
+    margin: 0 auto;
+  }
+  .mock-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .mock-badge {
+    width: 30px; height: 30px; border-radius: 10px;
+    background: var(--lime); display: inline-flex; align-items: center; justify-content: center;
+  }
+  .mock-title { font-weight: 700; font-size: 15px; }
+  .mock-sev {
+    margin-left: auto; font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink); background: var(--lime);
+    padding: 3px 9px; border-radius: 999px;
+  }
+  .mock-finding {
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    background: var(--canvas); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 12px; margin-bottom: 14px; font-size: 13px;
+  }
+  .mock-kind { font-weight: 600; }
+  .mock-val {
+    font-family: 'Geist Mono', ui-monospace, Menlo, monospace;
+    color: var(--muted); font-size: 12px;
+  }
+  .mock-actions { display: flex; gap: 8px; }
+  .mock-btn {
+    flex: 1; text-align: center; border-radius: 999px; padding: 9px 0;
+    font-size: 13px; font-weight: 600; border: 1px solid var(--line); background: var(--white);
+  }
+  .mock-btn.primary { background: var(--lime); border-color: var(--lime); }
+
+  .steps { display: flex; gap: 12px; margin: 0; padding: 0; list-style: none; }
+  .steps li { flex: 1; font-size: 13px; color: var(--muted); }
+  .step-n {
+    width: 24px; height: 24px; border-radius: 999px; background: var(--ink); color: var(--lime);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; margin-bottom: 8px;
+  }
+  .step-t { color: var(--ink); font-weight: 600; display: block; margin-bottom: 2px; }
+
+  .consent p { margin: 0 0 12px; color: var(--ink); }
+  .consent .fine { color: var(--muted); font-size: 13px; }
+  .btn {
+    display: inline-block; border: none; border-radius: 999px;
+    padding: 13px 28px; font: 600 15px/1 Geist, sans-serif;
+    cursor: pointer; margin: 8px 10px 4px 0; text-decoration: none;
+  }
+  .btn-primary { background: var(--lime); color: var(--ink); }
+  .btn-primary:hover { filter: brightness(0.97); }
+  .btn-ghost { background: var(--white); color: var(--ink); border: 1px solid var(--line); }
+  .status { min-height: 1.2em; font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+
+  code {
+    display: block; margin: 12px 0; padding: 13px 15px;
+    background: var(--canvas); border: 1px solid var(--line); border-radius: 12px;
+    font: 13px/1.5 'Geist Mono', ui-monospace, Menlo, monospace; color: var(--ink);
+    word-break: break-all;
+  }
+  .links { margin-top: 26px; font-size: 14px; }
+  .links a { color: var(--ink); }
+  .foot { color: var(--muted); font-size: 13px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1><svg class="mark" viewBox="0 0 22 14" aria-hidden="true"><rect width="22" height="6" rx="2" fill="#C6F24E"/><rect y="8" width="14" height="6" rx="2" fill="#1D1D1F"/></svg>API Key Leak Intercept</h1>
+  <p class="sub">It holds the send when a message is about to carry an API key, a password, or a card number out of the browser.</p>
+
+  <div class="sheet">
+    <div class="mock" aria-hidden="true">
+      <div class="mock-dialog">
+        <div class="mock-head">
+          <span class="mock-badge"><svg width="14" height="14" viewBox="0 0 22 14"><rect width="22" height="6" rx="2" fill="#1D1D1F"/><rect y="8" width="14" height="6" rx="2" fill="#1D1D1F"/></svg></span>
+          <span class="mock-title">Secret detected</span>
+          <span class="mock-sev">High</span>
+        </div>
+        <div class="mock-finding">
+          <span class="mock-kind">OpenAI API key</span>
+          <span class="mock-val">sk-proj-8f…4c2</span>
+        </div>
+        <div class="mock-actions">
+          <span class="mock-btn">Cancel</span>
+          <span class="mock-btn primary">Redact</span>
+          <span class="mock-btn">Send anyway</span>
+        </div>
+      </div>
+    </div>
+    <ul class="steps">
+      <li><span class="step-n">1</span><span class="step-t">Type into any AI chat</span>The extension watches the message you are about to send.</li>
+      <li><span class="step-n">2</span><span class="step-t">The send is held</span>A warning shows what was found before anything leaves.</li>
+      <li><span class="step-n">3</span><span class="step-t">You decide</span>Cancel, redact the secret, or send anyway.</li>
+    </ul>
+  </div>
+
+  <div class="sheet consent" id="consent">
+    <p><strong>Before protection starts, here is exactly what happens.</strong></p>
+    <p>The extension reads the message text you are about to send and checks it against detection patterns in your browser. If something is found, the send is held. Nothing is changed or sent unless you choose it.</p>
+    <p class="fine">Your text stays in the browser. Two routine background requests never carry message content: a daily check for the signed detection configuration, and with a Pro license a daily license check. Detection patterns can be updated by the developer through the signed configuration. The source code is public.</p>
+    <button class="btn btn-primary" id="enable-btn">Enable protection</button>
+    <button class="btn btn-ghost" id="later-btn">Not now</button>
+    <p class="status" id="consent-status"></p>
+  </div>
+
+  <div class="sheet" id="on-view" style="display:none;">
+    <p style="margin:0 0 4px;"><strong>Protection is on.</strong></p>
+    <p style="margin:0 0 4px;color:var(--muted);">Try it now. Open any AI chat, paste this line, and press Enter:</p>
+    <code>my key is sk-proj-abcdefghijklmnopqrstuvwxyz123456</code>
+    <p style="margin:0;color:var(--muted);">The warning appears before the message goes anywhere.</p>
+  </div>
+
+  <p class="links">
+    <a href="https://dariocositore.com/tools/api-key-leak-intercept/">Help and FAQ</a> &middot;
+    <a href="https://dariocositore.com/tools/api-key-leak-intercept/privacy/">Privacy</a> &middot;
+    <a href="https://github.com/dario-cositore/api-key-leak-intercept">Source code</a>
+  </p>
+  <p class="foot" id="footer-note">Close this tab whenever you like. To pause protection or change what gets detected, click the extension icon in the toolbar.</p>
+</main>
+<script src="welcome.js"></script>
+</body>
+</html>

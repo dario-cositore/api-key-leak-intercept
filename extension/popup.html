@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>API Key Leak Intercept</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+<!-- ══════════ STATE A — signed out (Free) ══════════ -->
+<div class="shell" id="sgp-shell-out">
+
+  <header class="hd">
+    <div class="br" id="sgp-mark">
+      <svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true"><rect width="22" height="6" rx="2" fill="#C6F24E"/><rect y="8" width="14" height="6" rx="2" fill="#1D1D1F"/></svg>
+      API Key Leak Intercept
+    </div>
+    <span class="chip" id="sgp-protag">Free plan</span>
+  </header>
+
+  <main class="sc">
+
+    <div class="hero" id="sgp-hero" style="margin-top:16px">
+      <div class="dial">
+          <svg class="ring" width="148" height="148" viewBox="0 0 148 148" fill="none" stroke-width="6" stroke-linecap="round" role="img" aria-label="Protection status">
+            <g transform="rotate(-90 74 74)">
+              <circle cx="74" cy="74" r="66" stroke="#DCDCE1" stroke-dasharray="62.9 20"/>
+              <circle cx="74" cy="74" r="66" stroke="#1D1D1F" stroke-dasharray="0 415" id="sgp-ring"/>
+            </g>
+          </svg>
+          <label class="disc" id="sgp-disc">
+            <input type="checkbox" id="sgp-enabled" class="mc" checked>
+            <span class="vh-name">Extension enabled</span>
+            <svg class="gk" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/></svg>
+            <svg class="gl" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+        </label>
+      </div>
+      <div class="hero-copy">
+        <p class="title" id="sgp-status" role="status"><span class="on">Guarding.</span><span class="off">Paused.</span></p>
+        <p class="mu">40+ AI chats and work tools</p>
+        <p class="mu" id="sgp-usage-note">0 leaks stopped this month</p>
+      </div>
+    </div>
+
+    <div class="event" id="sgp-event" style="display:none">
+      <div class="catch-head">
+        <span class="catch-type" id="sgp-event-type"></span>
+        <span class="catch-site" id="sgp-event-site"></span>
+      </div>
+      <div class="catch-body" id="sgp-event-note"></div>
+    </div>
+
+    <div class="lab" id="sgp-covered-label">Covered now</div>
+    <div class="card">
+      <div class="row is-static">
+        <span class="row-main">API keys and tokens<span class="sub">OpenAI, Anthropic, AWS, GitHub and more</span></span>
+        <span class="ok" id="sgp-covered-check"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#1D1D1F" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+      </div>
+    </div>
+
+    <div class="lab">Locked</div>
+    <div class="locked-grid">
+      <button class="lkb" type="button" data-upgrade><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Personal data</button>
+      <button class="lkb" type="button" data-upgrade><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>IP addresses</button>
+      <button class="lkb" type="button" data-upgrade><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Auto-redact</button>
+      <button class="lkb" type="button" data-upgrade><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Custom patterns</button>
+    </div>
+
+    <div class="upsell">
+      <h2>Sign in to unlock.</h2>
+      <div class="upsell-list">
+        <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C6F24E" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg> National IDs for 30 countries</span>
+        <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C6F24E" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg> Automatic redaction</span>
+        <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C6F24E" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg> Custom patterns</span>
+      </div>
+    </div>
+
+    <!-- sign-in drill-in -->
+    <section class="panel" id="sgp-plan" style="display:none">
+      <h2 class="panel-t">Account</h2>
+      <div class="field-row"><input type="email" class="input" id="sgp-account-email" placeholder="you@company.com" spellcheck="false" autocomplete="email" aria-label="Account email"></div>
+      <div class="field-row" style="margin-top:8px"><input type="password" class="input" id="sgp-account-password" placeholder="Password" autocomplete="current-password" aria-label="Account password"></div>
+      <button class="btn-fill" id="sgp-account-signin" type="button" style="width:100%;margin-top:10px">Sign in</button>
+      <div class="status" id="sgp-license-status" role="status"></div>
+      <details class="alt-key" id="sgp-alt-key">
+        <summary>Use a license key instead</summary>
+        <div class="field-row">
+          <input type="text" class="input mono" id="sgp-license-key" placeholder="SG-XXXXXXXXXXXXXXXX" spellcheck="false" autocomplete="off" aria-label="License key">
+          <button class="btn" id="sgp-verify-license" type="button">Verify</button>
+        </div>
+      </details>
+      <p class="fine">No password yet? The purchase email has a link to choose one.</p>
+    </section>
+
+    <div id="sgp-review-card" class="banner-quiet" style="display:none;margin-top:12px">
+      <p style="margin:0 0 8px">Enjoying API Key Leak Intercept? A quick review helps others find it.</p>
+      <div style="display:flex;gap:8px">
+        <button class="btn" id="sgp-review-now" type="button">Review</button>
+        <button class="btn" id="sgp-review-later" type="button">Not now</button>
+        <button class="btn" id="sgp-review-never" type="button">Don't ask again</button>
+      </div>
+    </div>
+  </main>
+
+  <footer class="ft" id="sgp-cta">
+    <div class="pb-row">
+      <button class="pb pb-primary" type="button" id="sgp-already-pro">Sign in <span class="arrow" aria-hidden="true">&#8599;</span></button>
+      <button class="pb pb-ghost" type="button" id="sgp-upgrade">Get Pro &middot; $7.99/mo</button>
+    </div>
+    <div class="fl">
+      <a href="https://dariocositore.com/tools/api-key-leak-intercept/" target="_blank" rel="noopener">Help</a>
+      <a href="https://github.com/dario-cositore/api-key-leak-intercept/issues/new" target="_blank" rel="noopener">Send feedback</a>
+      <span id="sgp-version">v1.2.4</span>
+    </div>
+  </footer>
+</div>
+
+
+<!-- ══════════ STATE B — signed in ══════════ -->
+<div class="shell" id="sgp-shell-in" style="display:none">
+
+  <header class="hd">
+    <span class="hd-title">Settings</span>
+    <span class="chip chip-on" id="sgp-protag-in">Pro</span>
+  </header>
+
+  <main class="sc">
+
+    <div class="br">
+      <svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true"><rect width="22" height="6" rx="2" fill="#C6F24E"/><rect y="8" width="14" height="6" rx="2" fill="#1D1D1F"/></svg>
+      API Key Leak Intercept
+    </div>
+
+    <div class="hero" id="sgp-hero-in" style="margin-top:14px">
+      <div class="dial">
+          <svg class="ring" width="148" height="148" viewBox="0 0 148 148" fill="none" stroke-width="6" stroke-linecap="round" role="img" aria-label="Protection status">
+            <g transform="rotate(-90 74 74)">
+              <circle cx="74" cy="74" r="66" stroke="#DCDCE1" stroke-dasharray="62.9 20"/>
+              <circle cx="74" cy="74" r="66" stroke="#1D1D1F" stroke-dasharray="0 415" id="sgp-ring-in"/>
+            </g>
+          </svg>
+          <label class="disc">
+            <input type="checkbox" id="sgp-enabled-in" class="mc" checked>
+            <span class="vh-name">Extension enabled</span>
+            <svg class="gk" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/></svg>
+            <svg class="gl" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+        </label>
+      </div>
+      <div class="hero-copy">
+        <p class="title" id="sgp-status-in" role="status"><span class="on">Guarding.</span><span class="off">Paused.</span></p>
+        <p class="mu">40+ AI chats and work tools</p>
+        <p class="mu">Press the key to pause.</p>
+      </div>
+    </div>
+
+    <div class="lab">Last catch</div>
+    <div class="card card-pad" id="sgp-event-in" style="display:none">
+      <div class="catch-head">
+        <span class="catch-type" id="sgp-event-type-in"></span>
+        <span class="catch-site" id="sgp-event-site-in"></span>
+        <strong class="catch-action" id="sgp-event-action-in">Held back</strong>
+      </div>
+      <div class="catch-body" id="sgp-event-note-in"></div>
+    </div>
+
+    <div class="lab">Detection</div>
+    <div class="card">
+      <label class="row"><span class="row-main">API keys and tokens</span><input class="sw" type="checkbox" id="sgp-cat-api"></label>
+      <label class="row"><span class="row-main">Personal data<span class="sub">Email, phones, cards, IDs for 30 countries</span></span><input class="sw" type="checkbox" id="sgp-cat-pii"></label>
+      <label class="row"><span class="row-main">IP addresses</span><input class="sw" type="checkbox" id="sgp-cat-net"></label>
+    </div>
+
+    <div class="lab">Redaction</div>
+    <div class="card">
+      <label class="row"><span class="row-main">Auto-redact<span class="sub">Redacts automatically at send time</span></span><input class="sw" type="checkbox" id="sgp-auto-redact"></label>
+      <button class="row" type="button" id="sgp-nav-custom" aria-expanded="false"><span class="row-main">Custom patterns<span class="sub" id="sgp-custom-count">None yet</span></span><span class="ch" aria-hidden="true">&#8250;</span></button>
+      <div class="custom-fold" id="sgp-custom-section">
+        <div class="custom-fold-in">
+          <textarea class="input mono ta" id="sgp-custom" rows="3" placeholder="One regex per line" spellcheck="false" aria-label="Custom patterns, one regular expression per line"></textarea>
+          <button class="btn-fill" id="sgp-save-custom" type="button" style="width:100%;margin-top:8px">Save patterns</button>
+          <p class="fine">Pro only. Each line is one regular expression.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="lab">Coverage</div>
+    <div class="card">
+      <label class="row"><span class="row-main">Universal mode<span class="sub">Scan every site, not only AI chats</span></span><input class="sw" type="checkbox" id="sgp-universal-mode"></label>
+    </div>
+
+    <div id="sgp-setup-block">
+      <div class="lab">Setup <span class="chip chip-mini">Team</span></div>
+      <div class="card card-pad" style="display:flex;gap:8px">
+        <input type="text" class="input mono" id="sgp-setup-code" placeholder="Paste setup code" spellcheck="false" aria-label="Setup code" style="flex:1;min-width:0">
+        <button class="btn-fill" type="button" id="sgp-apply-setup">Apply</button>
+      </div>
+    </div>
+
+    <div class="lab">Activity</div>
+    <div class="card">
+      <button class="row" type="button" id="sgp-view-log"><span class="row-main">Audit log<span class="sub">Full history in your console</span></span><span class="ch" aria-hidden="true">&#8599;</span></button>
+      <div class="row is-static">
+        <span class="row-main">Console sync<span class="sub" id="sgp-sync-status">Nothing sent yet</span></span>
+      </div>
+    </div>
+
+    <div class="lab">Account</div>
+    <div class="card">
+      <div class="row is-static"><span class="row-main" id="sgp-account-line">Signed in<span class="sub">Pro licence active</span></span></div>
+      <button class="row" type="button" id="sgp-open-console"><span class="row-main">Manage subscription</span><span class="ch" aria-hidden="true">&#8599;</span></button>
+      <button class="row row-danger" type="button" id="sgp-signout"><span class="row-main">Sign out</span></button>
+    </div>
+
+  </main>
+
+  <footer class="ft">
+    <p class="foot-note">API Key Leak Intercept has stopped <strong id="sgp-month-count">0 leaks</strong> this month.</p>
+    <button class="pb pb-primary pb-wide" type="button" id="sgp-team-console">Open team console <span class="arrow" aria-hidden="true">&#8594;</span></button>
+    <div class="fl">
+      <a href="https://dariocositore.com/tools/api-key-leak-intercept/" target="_blank" rel="noopener">Help</a>
+      <a href="https://github.com/dario-cositore/api-key-leak-intercept/issues/new" target="_blank" rel="noopener">Send feedback</a>
+      <span id="sgp-version-in">v1.1.0</span>
+    </div>
+  </footer>
+</div>
+
+<script src="setupcode.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
