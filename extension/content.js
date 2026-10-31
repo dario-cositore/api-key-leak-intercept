@@ -703,35 +703,76 @@
       tab.addEventListener('click', () => {
         const isOpen = root.classList.toggle('is-open');
         tab.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        notchPinned = isOpen;
+        if (isOpen) { setNotch(0); }
+        else {
+          // the button must drop its focus and tuck back on its own, or the
+          // panel stays open until the user clicks somewhere else
+          try { tab.blur(); } catch (e) {}
+          setNotch(HIDDEN_AT_REST);
+        }
       });
 
-      // Edge notch reveal: the tab tucks behind the left edge and slides out
-      // in proportion to how close the cursor is, so passing the mouse along
-      // the edge brings it out slowly instead of popping.
-      const NOTCH_REST = 62;
-      let notchZone = null;
+      // Edge notch, the polished assistant pattern: the tab sits fully behind
+      // the edge with only a three-dot handle showing. Cursor movement near
+      // the edge peeks it out along a distance curve; the pointer landing on
+      // it slides it all the way out; five seconds of stillness tucks it back.
+      const HIDDEN_AT_REST = 100;
+      const PEEK_FLOOR = 50;
+      const REACH = 400;
+      const IDLE_MS = 5000;
+      let peekValue = HIDDEN_AT_REST;
+      let notchHover = false;
+      let notchPinned = false;
+      let notchIdle = null;
+      let notchRaf = null;
       const setNotch = (pct) => {
+        peekValue = pct;
         try { root.style.setProperty('--hidden-percent', Math.round(pct) + '%'); } catch (e) {}
       };
-      setNotch(NOTCH_REST);
-      notchZone = (e) => {
-        const rect = tab.getBoundingClientRect();
-        const band = 110;
-        const inBand = e.clientY > rect.top - band && e.clientY < rect.bottom + band;
-        if (!inBand) { setNotch(NOTCH_REST); return; }
-        const reach = 150;
-        const closeness = e.clientX >= reach ? 0 : Math.max(0, 1 - e.clientX / reach);
-        setNotch(NOTCH_REST * (1 - closeness));
+      setNotch(HIDDEN_AT_REST);
+      const onNotchMove = (e) => {
+        if (notchPinned || notchHover) return;
+        if (notchIdle) clearTimeout(notchIdle);
+        notchIdle = setTimeout(() => setNotch(HIDDEN_AT_REST), IDLE_MS);
+        if (notchRaf) return;
+        if (typeof requestAnimationFrame !== 'function') return;
+        notchRaf = requestAnimationFrame(() => {
+          notchRaf = null;
+          const rect = tab.getBoundingClientRect();
+          // elliptical reach, the vertical axis counting half: movement
+          // anywhere along the left side starts the peek
+          const anchorX = rect.left;
+          const anchorY = (rect.top + rect.bottom) / 2;
+          const dx = e.clientX - anchorX;
+          const dy = e.clientY - anchorY;
+          const dist = Math.sqrt(dx * dx + (dy / 2) * (dy / 2));
+          const capped = Math.abs(dx) < 10 ? Math.min(dist, REACH - 50) : dist;
+          const pct = capped >= REACH
+            ? HIDDEN_AT_REST
+            : PEEK_FLOOR + (HIDDEN_AT_REST - PEEK_FLOOR) * (capped / REACH);
+          setNotch(Math.round(pct / 2) * 2);
+        });
       };
-      document.addEventListener('mousemove', notchZone, { passive: true });
-      // a catch is worth noticing even when the mouse is nowhere near the edge
-      if (state === 'warn' || state === 'danger') setNotch(0);
+      document.addEventListener('mousemove', onNotchMove, { passive: true });
+      tab.addEventListener('mouseenter', () => {
+        notchHover = true;
+        if (!notchPinned && !root.classList.contains('is-open')) setNotch(0);
+      });
+      tab.addEventListener('mouseleave', () => {
+        notchHover = false;
+        if (!notchPinned && !root.classList.contains('is-open')) setNotch(HIDDEN_AT_REST);
+      });
+      // a catch is worth seeing even when the mouse is nowhere near the edge
+      if (state === 'warn' || state === 'danger') { notchHover = true; setNotch(0); }
       document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         if (!document.body.contains(root)) return;
         if (root.classList.contains('is-open')) {
           root.classList.remove('is-open');
           tab.setAttribute('aria-expanded', 'false');
+          try { tab.blur(); } catch (e) {}
+          try { root.style.setProperty('--hidden-percent', '100%'); } catch (e) {}
         }
       });
       renderWidget();
@@ -740,6 +781,7 @@
     if (state === 'warn') root.classList.add('sg-warn');
     if (state === 'danger') root.classList.add('sg-danger');
     if (state === 'warn' || state === 'danger') { try { root.style.setProperty('--hidden-percent', '0%'); } catch (e) {} }
+    else if (!root.classList.contains('is-open')) { try { root.style.setProperty('--hidden-percent', '100%'); } catch (e) {} }
     renderWidget();
   }
 
