@@ -704,6 +704,28 @@
         const isOpen = root.classList.toggle('is-open');
         tab.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
       });
+
+      // Edge notch reveal: the tab tucks behind the left edge and slides out
+      // in proportion to how close the cursor is, so passing the mouse along
+      // the edge brings it out slowly instead of popping.
+      const NOTCH_REST = 62;
+      let notchZone = null;
+      const setNotch = (pct) => {
+        try { root.style.setProperty('--hidden-percent', Math.round(pct) + '%'); } catch (e) {}
+      };
+      setNotch(NOTCH_REST);
+      notchZone = (e) => {
+        const rect = tab.getBoundingClientRect();
+        const band = 110;
+        const inBand = e.clientY > rect.top - band && e.clientY < rect.bottom + band;
+        if (!inBand) { setNotch(NOTCH_REST); return; }
+        const reach = 150;
+        const closeness = e.clientX >= reach ? 0 : Math.max(0, 1 - e.clientX / reach);
+        setNotch(NOTCH_REST * (1 - closeness));
+      };
+      document.addEventListener('mousemove', notchZone, { passive: true });
+      // a catch is worth noticing even when the mouse is nowhere near the edge
+      if (state === 'warn' || state === 'danger') setNotch(0);
       document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         if (!document.body.contains(root)) return;
@@ -717,6 +739,7 @@
     root.classList.remove('sg-warn', 'sg-danger');
     if (state === 'warn') root.classList.add('sg-warn');
     if (state === 'danger') root.classList.add('sg-danger');
+    if (state === 'warn' || state === 'danger') { try { root.style.setProperty('--hidden-percent', '0%'); } catch (e) {} }
     renderWidget();
   }
 
