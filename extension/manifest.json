@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_extName__",
   "short_name": "API Key Leak Intercept",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "__MSG_extDescription__",
   "author": "Dario Cositore",
   "homepage_url": "https://dariocositore.com/tools/api-key-leak-intercept/",

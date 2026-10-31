@@ -136,7 +136,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   chrome.alarms.create('licenseCheck', { periodInMinutes: 1440 });
   chrome.alarms.create('heartbeat', { periodInMinutes: 360 });
   chrome.alarms.create('configCheck', { periodInMinutes: 1440 });
-  try { chrome.runtime.setUninstallURL('https://dariocositore.com/tools/api-key-leak-intercept/'); } catch (e) {}
+  try {
+    // the uninstall survey, with the version for context. deliberately no
+    // browsing data: the privacy page promises the extension sends none
+    const unV = chrome.runtime.getManifest().version;
+    chrome.runtime.setUninstallURL(
+      'https://dariocositore.com/tools/api-key-leak-intercept/uninstall/?utm_medium=internal&utm_campaign=extensionUninstall&extensionName=chrome&extensionVersion=' + encodeURIComponent(unV));
+  } catch (e) {}
   if (details && details.reason === 'install') {
     try { chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') }); } catch (e) {}
   }
