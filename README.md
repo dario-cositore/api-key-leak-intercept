@@ -24,6 +24,12 @@ The full source of the extension you install: detection patterns, the warning mo
 
 The licensing and console service behind the paid tiers (accounts, license verification, the IT console and alert routing) is hosted at api.dariocositore.com by Dario Cositore. Its source is not in this repository. The extension asks it whether a license or team entitlement is valid and takes the answer at face value.
 
+## What it covers
+
+The full inventory of sites, detection patterns and checksum validators, generated from this source:
+
+https://dariocositore.com/tools/api-key-leak-intercept/coverage/
+
 ## Prices
 
 Pro is $7.99 per month or $59 per year. Team Volume is $4 per seat per month. https://dariocositore.com/pricing/
