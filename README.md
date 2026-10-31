@@ -46,6 +46,12 @@ Pro is $7.99 per month or $59 per year. Team Volume is $4 per seat per month. ht
 - Setup codes configure an install in one paste; managed installs read the same settings from Chrome Enterprise policy and can lock them.
 - The console keeps the last 500 alerts per organization, shows which installs are alive, and counts seats.
 
+## Enterprise deployment
+
+The IT admin guide covers the rollout end to end: Chrome Enterprise policy, setup codes, policy keys, alert channels, the console, and the lockdown levers.
+
+https://github.com/dario-cositore/api-key-leak-intercept/blob/main/docs/it-admin-guide.md
+
 ## Privacy
 
 Detection runs in the browser. Message text and detected secrets are never transmitted. The full data-flow inventory is on the privacy page:

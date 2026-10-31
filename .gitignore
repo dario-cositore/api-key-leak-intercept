@@ -5,7 +5,9 @@ backend/
 PUBLISHING.md
 DATA-FLOW.md
 INTERFACE.md
-docs/
+docs/selector-audit.md
+docs/locale-review-pack.md
+docs/release-checklist.md
 store-assets/
 /*.zip
 tests/entitlement.test.js
