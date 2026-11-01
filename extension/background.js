@@ -742,17 +742,34 @@ function sendEmail(channel, alert) {
 }
 
 function sendToWorker(alert, forward) {
-  return fetch(WORKER_URL + '/api/alerts', {
+  return getInstallId().then((installId) => fetch(WORKER_URL + '/api/alerts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ alert, forward: !!forward }),
+    body: JSON.stringify({ alert, forward: !!forward, installId }),
     cache: 'no-store',
-  }).then(r => {
+  })).then(r => {
     recordSync(r.ok, 'org', r.ok ? '' : 'HTTP ' + r.status);
     if (!r.ok) throw new Error('Worker ' + r.status);
   }).catch(e => {
     recordSync(false, 'org', e && e.message ? e.message : 'network error');
     throw e;
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Install identity                                                    */
+/* A stable per-install id so the console can count seats per machine  */
+/* instead of per user email. Generated once, kept in local storage.   */
+/* ------------------------------------------------------------------ */
+function getInstallId() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['sg_install_id'], (m) => {
+      if (m.sg_install_id) return resolve(m.sg_install_id);
+      const id = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID().replace(/-/g, '')
+        : (String(Date.now()) + Math.random()).replace(/[^a-z0-9]/gi, '').slice(0, 32);
+      chrome.storage.local.set({ sg_install_id: id }, () => resolve(id));
+    });
   });
 }
 
@@ -770,6 +787,7 @@ async function doHeartbeat() {
       userEmail: org.userEmail || 'unknown',
       extensionVersion: chrome.runtime.getManifest().version,
       managed: !!managed,
+      installId: await getInstallId(),
       timestamp: new Date().toISOString(),
     };
     const url = (org.alertEndpoint && /^https:\/\//i.test(org.alertEndpoint)) ? org.alertEndpoint.replace(/\/$/, '') + '/heartbeat' : (WORKER_URL + '/api/heartbeat');
