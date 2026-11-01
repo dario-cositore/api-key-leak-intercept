@@ -4,11 +4,13 @@ Warns you before an API key, secret, or piece of personal data leaves your brows
 
 ## Install
 
-The install page carries the package and the three steps to load it:
+The extension is on the Chrome Web Store:
+
+https://chromewebstore.google.com/detail/api-key-leak-intercept/ajnlfcdamhbkpdkkmooijamanhlfhpod
+
+The install page carries the manual package and its checksum, and every GitHub Release here carries the same package:
 
 https://dariocositore.com/tools/api-key-leak-intercept/install/
-
-Every GitHub Release here carries the same package.
 
 ## Test it (30 seconds)
 

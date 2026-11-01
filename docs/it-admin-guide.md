@@ -30,7 +30,7 @@ Both paths can run side by side: policy for managed laptops, setup codes for con
 
 Two pieces go into your browser policy: the force-install entry and the extension's own settings.
 
-Force-install the extension by its Chrome Web Store ID with `ExtensionInstallForcelist`. Once the listing is live the ID is on the store page. Employees cannot uninstall a force-installed extension.
+Force-install the extension by its Chrome Web Store ID with `ExtensionInstallForcelist`. The listing is live at <https://chromewebstore.google.com/detail/api-key-leak-intercept/ajnlfcdamhbkpdkkmooijamanhlfhpod> and the ID is `ajnlfcdamhbkpdkkmooijamanhlfhpod`. Employees cannot uninstall a force-installed extension.
 
 Put the settings under `3rdparty`, keyed by the same extension ID. The console generates this block for you (Policy JSON export), so copy it from there. It looks like this:
 
@@ -38,7 +38,7 @@ Put the settings under `3rdparty`, keyed by the same extension ID. The console g
 {
   "3rdparty": {
     "extensions": {
-      "EXTENSION_ID_HERE": {
+      "ajnlfcdamhbkpdkkmooijamanhlfhpod": {
         "orgId": "org_ab12cd34ef56",
         "orgToken": "tok_your_ingest_token",
         "userEmail": "employee@yourcompany.com",
