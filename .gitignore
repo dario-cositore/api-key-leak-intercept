@@ -11,6 +11,7 @@ docs/release-checklist.md
 store-assets/
 /*.zip
 tests/entitlement.test.js
+tests/waffo-webhook.test.js
 tests/entitlement-state.test.js
 tests/managed-flow.test.js
 tests/manual.html

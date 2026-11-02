@@ -64,6 +64,10 @@ function getEffectiveOrg(cb) {
         if (m.orgToken) org.orgToken = String(m.orgToken);
         if (m.userEmail) org.userEmail = String(m.userEmail);
         if (typeof m.universalMode === 'boolean') org.universalMode = m.universalMode;
+        // extraSites is a documented policy key and is what widens the dynamic
+        // content script beyond the built-in list. Leaving it out of this merge
+        // meant a policy-only install registered no script at all.
+        if (Array.isArray(m.extraSites)) org.extraSites = m.extraSites.map(String);
         if (m.alertEndpoint) org.alertEndpoint = String(m.alertEndpoint);
         for (const k of ['alertOnWarn', 'alertOnSendAnyway', 'alertOnBlock', 'alertOnRedact']) {
           if (typeof m[k] === 'boolean') org[k] = m[k];
@@ -99,6 +103,19 @@ async function checkEntitlement() {
       body: JSON.stringify({ orgId: org.orgId, orgToken: org.orgToken }),
       cache: 'no-store',
     });
+    // A rotated ingest token answers 401 and a deleted org answers 404. Both
+    // are the server actively refusing this install, not a network blip, and
+    // the policy above is that a definitive refusal revokes at once. Leaving
+    // the cache untouched on those two left a terminated install entitled for
+    // the whole TTL plus grace, 21 days, and kept its seat warm. verifyLicense
+    // already treats a definitive invalid as a revocation; this path did not.
+    if (r.status === 401 || r.status === 404) {
+      await new Promise((resolve) => chrome.storage.local.set({
+        sg_entitlement: { pro: false, orgId: org.orgId, at: Date.now() },
+      }, resolve));
+      broadcastSettingsUpdated();
+      return;
+    }
     const data = await r.json();
     if (data && data.ok) {
       await new Promise((resolve) => chrome.storage.local.set({
@@ -132,10 +149,23 @@ function withNormalizedLeaks(cb) {
 /* ------------------------------------------------------------------ */
 /* Install / defaults                                                  */
 /* ------------------------------------------------------------------ */
+// Alarms were created here and nowhere else. Chrome does not promise they
+// survive a profile repair or a browser update, and when they vanish the daily
+// licence revalidation, the entitlement refresh, the config fetch and the
+// six-hourly seat heartbeat all stop silently until the next extension update.
+// Creating a same-named alarm replaces the old one, so re-asserting on every
+// service worker start is idempotent and costs nothing.
+function ensureAlarms() {
+  try {
+    chrome.alarms.create('licenseCheck', { periodInMinutes: 1440 });
+    chrome.alarms.create('heartbeat', { periodInMinutes: 360 });
+    chrome.alarms.create('configCheck', { periodInMinutes: 1440 });
+  } catch (e) {}
+}
+ensureAlarms();
+
 chrome.runtime.onInstalled.addListener((details) => {
-  chrome.alarms.create('licenseCheck', { periodInMinutes: 1440 });
-  chrome.alarms.create('heartbeat', { periodInMinutes: 360 });
-  chrome.alarms.create('configCheck', { periodInMinutes: 1440 });
+  ensureAlarms();
   try {
     // the uninstall survey, with the version for context. deliberately no
     // browsing data: the privacy page promises the extension sends none
@@ -154,8 +184,11 @@ chrome.runtime.onInstalled.addListener((details) => {
       if (res[k] === undefined) toSet[k] = DEFAULTS[k];
     }
     if (res.sg_leaks_month === undefined) toSet.sg_leaks_month = currentMonth();
-    // migrate: PII/network detection is Pro-only from 1.0.0 on
-    if (res.sg_settings && res.sg_settings.categories && res.sg_settings.categories.pii && !res.sg_isPro) {
+    // migrate: PII/network detection is Pro-only from 1.0.0 on. Both flags,
+    // so a stale sg_isPro cannot keep the paid categories switched on while
+    // the popup reports Free.
+    if (res.sg_settings && res.sg_settings.categories && res.sg_settings.categories.pii
+        && !(res.sg_isPro && res.sg_license_key)) {
       const cats = { ...res.sg_settings.categories, pii: false, network: false };
       toSet.sg_settings = { ...res.sg_settings, categories: cats };
     }
@@ -251,12 +284,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {  if (!msg)
   }
 
   if (msg.type === 'incrementLeaksStopped') {
-    withNormalizedLeaks((n) => {
-      const next = n + 1;
-      chrome.storage.local.set({ sg_leaks_stopped: next, sg_leaks_month: currentMonth() }, () => {
-        sendResponse({ count: next });
+    // Through the same queue as the audit log. Two catches in the same second
+    // read the same n and both wrote n+1, so one increment was silently lost
+    // and the "leaks stopped" number undercounted.
+    auditWriteQueue = auditWriteQueue.then(() => new Promise((resolve) => {
+      withNormalizedLeaks((n) => {
+        const next = n + 1;
+        chrome.storage.local.set({ sg_leaks_stopped: next, sg_leaks_month: currentMonth() }, () => {
+          sendResponse({ count: next });
+          resolve();
+        });
       });
-    });
+    }));
     return true;
   }
 
@@ -405,9 +444,14 @@ async function syncDynamicContentScript() {
   let org = null;
   let cfg = null;
   try {
-    const res = await new Promise((r) => chrome.storage.local.get(['sg_org', 'sg_config', 'sg_config_exp'], r));
+    // getEffectiveOrg, not the raw sg_org record. Managed policy is the only
+    // source of universalMode and extraSites for a policy-only install, so
+    // reading the local record alone computed matches = [] and unregistered
+    // the dynamic script: the MDM rollout got no coverage outside the built-in
+    // list, silently, until somebody opened the popup and pressed Save.
+    org = await new Promise((resolve) => getEffectiveOrg(resolve));
+    const res = await new Promise((r) => chrome.storage.local.get(['sg_config', 'sg_config_exp'], r));
     const cfgExpired = typeof res.sg_config_exp === 'number' && res.sg_config_exp * 1000 <= Date.now();
-    org = res.sg_org || {};
     cfg = cfgExpired ? {} : (res.sg_config || {});
   } catch (e) { return; }
 
@@ -445,6 +489,18 @@ chrome.storage.onChanged.addListener((changes) => {
     try { syncDynamicContentScript(); } catch (e) {}
   }
 });
+
+// Policy changes arrive through storage.managed and fire no other listener, so
+// a managed install only picked up a new universalMode or extraSites after
+// somebody opened the popup and saved. Registering the script is the whole
+// point of those two keys, so policy has to re-sync on its own.
+if (chrome.storage && chrome.storage.managed && chrome.storage.managed.onChanged) {
+  try {
+    chrome.storage.managed.onChanged.addListener(() => {
+      try { syncDynamicContentScript(); } catch (e) {}
+    });
+  } catch (e) {}
+}
 
 /* ------------------------------------------------------------------ */
 /* License verification (server-side revalidation included)            */
@@ -530,8 +586,12 @@ function handleAlert(alert, sendResponse) {
   if (!alert || !alert.action) { sendResponse({ ok: false, reason: 'bad alert' }); return; }
 
   withManagedState((managed) => {
-    chrome.storage.local.get(['sg_isPro'], (res) => {
-      const isPro = !!res.sg_isPro;
+    chrome.storage.local.get(['sg_isPro', 'sg_license_key'], (res) => {
+      // Both flags, same rule as getSettings. Local history is a paid feature
+      // and checking sg_isPro on its own reopened it to a stale flag with no
+      // verification behind it, which is exactly the state the 1.2.4 fix was
+      // written to close.
+      const isPro = !!res.sg_isPro && !!res.sg_license_key;
       getEffectiveOrg((o) => {
       const isTeam = managed || !!(o.teamMode && o.orgId && alert.orgId);
 
@@ -541,8 +601,12 @@ function handleAlert(alert, sendResponse) {
       storeAlertLocally(alert);
 
       if (!isTeam) {
-        sendPersonalAlert(alert);
-        sendResponse({ ok: true, stored: true });
+        // Await the relay before answering. Responding first left the service
+        // worker free to be terminated in the gap, losing the console relay and
+        // its sync status while the local log already recorded the catch.
+        Promise.resolve(sendPersonalAlert(alert)).catch(() => {}).then(() => {
+          sendResponse({ ok: true, stored: true });
+        });
         return;
       }
 
@@ -761,8 +825,14 @@ function sendToWorker(alert, forward) {
 /* A stable per-install id so the console can count seats per machine  */
 /* instead of per user email. Generated once, kept in local storage.   */
 /* ------------------------------------------------------------------ */
+// Memoised for the life of the worker. Two concurrent first-time callers both
+// read an empty store and each minted its own id, and the last write won, so
+// one machine reported two seats for the following month. The heartbeat and
+// the alert relay reach this at the same moment on a restored session.
+let installIdPromise = null;
 function getInstallId() {
-  return new Promise((resolve) => {
+  if (installIdPromise) return installIdPromise;
+  installIdPromise = new Promise((resolve) => {
     chrome.storage.local.get(['sg_install_id'], (m) => {
       if (m.sg_install_id) return resolve(m.sg_install_id);
       const id = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -771,6 +841,7 @@ function getInstallId() {
       chrome.storage.local.set({ sg_install_id: id }, () => resolve(id));
     });
   });
+  return installIdPromise;
 }
 
 /* ------------------------------------------------------------------ */
@@ -795,7 +866,7 @@ async function doHeartbeat() {
   } catch (e) {}
 }
 
-chrome.runtime.onStartup.addListener(() => { try { doHeartbeat(); } catch (e) {} try { fetchConfig(); } catch (e) {} try { checkEntitlement(); } catch (e) {} try { syncDynamicContentScript(); } catch (e) {} });
+chrome.runtime.onStartup.addListener(() => { try { ensureAlarms(); } catch (e) {} try { doHeartbeat(); } catch (e) {} try { fetchConfig(); } catch (e) {} try { checkEntitlement(); } catch (e) {} try { syncDynamicContentScript(); } catch (e) {} });
 
 const CONFIG_URL = WORKER_URL + '/api/config';
 
@@ -825,9 +896,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'heartbeat') { doHeartbeat(); return; }
   if (alarm.name === 'configCheck') { fetchConfig(); return; }
   if (alarm.name !== 'licenseCheck') return;
-  // Daily Pro revalidation: revoke only on a definitive "invalid" answer
+  // Daily Pro revalidation: revoke only on a definitive "invalid" answer.
+  // Gated on the key alone, not on sg_isPro as well. Requiring both meant a
+  // licence that failed verification once was never checked again, so a
+  // transient KV miss right after purchase, or a dunning blip that later
+  // cleared, latched a paying user to free until they happened to open the
+  // popup. The revocation latch has to be two-way to be worth anything.
   chrome.storage.local.get(['sg_license_key', 'sg_isPro'], (res) => {
-    if (res.sg_license_key && res.sg_isPro) verifyLicense(res.sg_license_key, () => {});
+    if (res.sg_license_key) verifyLicense(res.sg_license_key, () => {});
   });
   checkEntitlement();
 });

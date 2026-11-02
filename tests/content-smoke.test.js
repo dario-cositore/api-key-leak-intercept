@@ -64,7 +64,13 @@ class StubElement {
 
 function loadContentScript(opts) {
   opts = opts || {};
-  const storageRes = opts.storageRes || {};
+  // An empty store is not the normal case: a real user has a sg_settings record
+  // because the welcome page wrote one after they accepted. Default to that so
+  // these tests exercise interception rather than the consent gate. Pass
+  // storageRes: {} explicitly to model "no record yet".
+  const storageRes = opts.storageRes !== undefined ? opts.storageRes : {
+    sg_settings: { enabled: true, categories: { apiKeys: true, pii: false, network: false } },
+  };
   const listeners = {};
   const appended = [];
   const registry = new Map();
@@ -106,6 +112,9 @@ function loadContentScript(opts) {
       },
     },
     storage: {
+      onChanged: {
+        addListener(fn) { (listeners.storageChanged = listeners.storageChanged || []).push(fn); },
+      },
       local: {
         get(keys, cb) { cb(storageRes); },
         set() {},
@@ -210,6 +219,7 @@ test('clean message passes through untouched', () => {
 test('blockSendAnyway hides the send button even without enforceJustification', () => {
   const env = loadContentScript({
     storageRes: {
+      sg_settings: { enabled: true, categories: { apiKeys: true, pii: false, network: false } },
       sg_org: {
         teamMode: true,
         orgId: 'org_abc12345',
@@ -237,6 +247,21 @@ test('text drop with a secret uses the paste redaction path', () => {
   const overlay = env.appended.find((el) => el.id === 'sg-overlay');
   assert.ok(overlay, 'text drop with a secret must open the modal');
   assert.match(overlay.innerHTML, /Redact and paste/, 'text drops reuse the paste redaction path');
+});
+
+test('paste mode prints no fragment of the secret into the page DOM', () => {
+  // In paste and attach modes the content never reached the page. Printing
+  // any part of the preview would put it there anyway, in the DOM of the very
+  // site the user is declining to hand it to, so those modes name the type
+  // and the severity and nothing else.
+  const env = loadContentScript();
+  const event = dropEvent(SECRET);
+  for (const fn of env.listeners.drop) fn(event);
+
+  const overlay = env.appended.find((el) => el.id === 'sg-overlay');
+  assert.ok(overlay, 'the modal must appear');
+  assert.ok(!overlay.innerHTML.includes('sk-proj'), 'no fragment of the secret in the DOM');
+  assert.ok(overlay.innerHTML.includes('OpenAI API key'), 'the type is still named');
 });
 
 test('file attachments get no redact button', async () => {
@@ -318,6 +343,27 @@ test('auto-redact on a stuck editor never sends: the modal appears instead', () 
   assert.equal(env.appended.find((el) => el.id === 'sg-toast'), undefined, 'no false redaction claim');
 });
 
+test('auto-redact never sends on a framework editor that only took the DOM write', () => {
+  // Lexical and ProseMirror submit their model, not their markup. execCommand
+  // is ignored there, so setText forces textContent: the box LOOKS redacted
+  // while the text that goes out is still the original. A verified DOM
+  // read-back is not proof of a verified write, so this must fall to the modal.
+  const env = loadContentScript({ storageRes: PRO_AUTO });
+  const el = new StubElement('div', new Map());
+  el.isContentEditable = true;
+  el.textContent = SECRET;
+  const event = keydownEvent(el, SECRET);
+  for (const fn of env.listeners.keydown) fn(event);
+
+  assert.equal(event.prevented, true, 'the send must be parked');
+  assert.ok(el.textContent.includes('[API_KEY'), 'the DOM does show the redaction');
+  assert.ok(
+    env.appended.find((e2) => e2.id === 'sg-overlay'),
+    'the modal must appear because the editor state was never reached'
+  );
+  assert.equal(env.appended.find((e2) => e2.id === 'sg-toast'), undefined, 'no redaction claim');
+});
+
 test('manual redact on a stuck editor keeps the modal open and warns', () => {
   const env = loadContentScript({ storageRes: PRO_MANUAL });
   const ta = stuckTextarea();
@@ -346,4 +392,169 @@ test('manual redact on a working editor closes the modal and redacts', () => {
   assert.ok(overlay.removed, 'modal closes on success');
   assert.ok(!ta.value.includes('sk-proj'), 'secret replaced');
   assert.ok(ta.value.includes('[API_KEY'), 'placeholder written');
+});
+
+// ---------------------------------------------------------------------------
+// Click-path send controls.
+//
+// StubElement.closest() returns null, which is exactly how the click path
+// shipped broken: isSendButton matched `button, [role="button"]` while the
+// handler re-derived the button with `closest('button')` and bailed on every
+// role="button" control. The elements below evaluate the selector for real,
+// so that shape of bug fails here instead of reaching the store.
+// ---------------------------------------------------------------------------
+
+function sendableMatches(el, sel) {
+  const tag = (el.tagName || '').toLowerCase();
+  const role = el.getAttribute('role');
+  const type = (el.getAttribute('type') || el.type || '').toLowerCase();
+  return String(sel).split(',').some((raw) => {
+    const p = raw.trim();
+    if (p === 'button') return tag === 'button';
+    if (p === '[role="button"]') return role === 'button';
+    if (p === 'input[type="submit"]') return tag === 'input' && type === 'submit';
+    if (p === 'input[type="image"]') return tag === 'input' && type === 'image';
+    return false;
+  });
+}
+
+// A send control that really evaluates SENDABLE, paired with the composer it
+// would send, so findInputEl can reach it through querySelector. `type` is set
+// as a property as well as an attribute: isEditable reads el.type, and the
+// stub's constructor default of 'text' would otherwise make a submit input
+// look like the composer.
+function sendControl(tagName, attrs, text) {
+  const el = new StubElement(tagName, new Map());
+  el._attrs = Object.assign({}, attrs);
+  el.getAttribute = (k) => (k in el._attrs ? el._attrs[k] : null);
+  if ('type' in el._attrs) el.type = el._attrs.type;
+  el.closest = (sel) => (sendableMatches(el, sel) ? el : null);
+  el.click = () => { el.clicked = true; };
+  const ta = new StubElement('textarea', new Map());
+  ta.value = text || SECRET;
+  el.querySelector = () => ta;
+  el._composer = ta;
+  return el;
+}
+
+function clickEvent(target) {
+  return {
+    target,
+    prevented: false,
+    preventDefault() { this.prevented = true; },
+    stopPropagation() {},
+    stopImmediatePropagation() {},
+  };
+}
+
+test('click on a role="button" send control is intercepted', () => {
+  const env = loadContentScript();
+  const event = clickEvent(sendControl('div', { role: 'button', 'aria-label': 'Send message' }));
+  for (const fn of env.listeners.click) fn(event);
+
+  assert.equal(event.prevented, true, 'a role="button" send must be intercepted');
+  assert.ok(env.appended.find((el) => el.id === 'sg-overlay'), 'warning modal must appear');
+});
+
+test('click on a submit input is intercepted', () => {
+  const env = loadContentScript();
+  const event = clickEvent(sendControl('input', { type: 'submit', value: 'Send' }));
+  for (const fn of env.listeners.click) fn(event);
+
+  assert.equal(event.prevented, true, 'a submit input must be intercepted');
+  assert.ok(env.appended.find((el) => el.id === 'sg-overlay'), 'warning modal must appear');
+});
+
+test('click on an ordinary button is intercepted too', () => {
+  const env = loadContentScript();
+  const event = clickEvent(sendControl('button', { 'aria-label': 'Send' }));
+  for (const fn of env.listeners.click) fn(event);
+
+  assert.equal(event.prevented, true, 'a plain button send must be intercepted');
+});
+
+test('form submit is stopped even with no click on a send control', () => {
+  const env = loadContentScript();
+  const el = sendControl('div', {});
+  const form = new StubElement('form', new Map());
+  form.querySelector = () => el._composer;
+  const event = {
+    target: form,
+    prevented: false,
+    preventDefault() { this.prevented = true; },
+    stopPropagation() {},
+    stopImmediatePropagation() {},
+  };
+  for (const fn of env.listeners.submit) fn(event);
+
+  assert.equal(event.prevented, true, 'a form carrying a secret must be stopped');
+  assert.ok(env.appended.find((el2) => el2.id === 'sg-overlay'), 'warning modal must appear');
+});
+
+test('a non-send control is never intercepted', () => {
+  const env = loadContentScript();
+  const event = clickEvent(sendControl('button', { 'aria-label': 'Bold' }, 'hello there'));
+  for (const fn of env.listeners.click) fn(event);
+
+  assert.equal(event.prevented, false, 'ordinary buttons must pass through');
+});
+
+test('revoking the licence reaches an already-open tab', () => {
+  // loadSettings must derive isPro fresh on every run. It used to set the flag
+  // true and never clear it, so after a sign-out or a revocation open tabs kept
+  // running PII, custom patterns and redaction while the popup already said
+  // Free. Reproducing it needs one settings object and two loads: the flag has
+  // to have been true before it can go stale.
+  const storageRes = {
+    sg_isPro: true,
+    sg_license_key: 'SG-AABBCCDDEEFF0011',
+    sg_settings: { enabled: true, categories: { apiKeys: true, pii: false, network: false }, autoRedact: true },
+  };
+  const env = loadContentScript({ storageRes });
+
+  // Build the event once. There is more than one keydown listener, and
+  // keydownEvent rewrites target.value each time it is called, so calling it
+  // per handler would put the secret back after the first handler redacted it.
+  const ta = new StubElement('textarea', new Map());
+  const first = keydownEvent(ta, SECRET);
+  for (const fn of env.listeners.keydown) fn(first);
+  assert.ok(ta.value.includes('[API_KEY'), 'auto-redact runs while the licence is valid');
+
+  // The licence is revoked underneath the open tab. The harness does not run
+  // setTimeout callbacks, so clear the send-through latch by hand first.
+  delete storageRes.sg_isPro;
+  delete storageRes.sg_license_key;
+  for (const fn of (env.listeners.storageChanged || [])) fn({ sg_isPro: {} }, 'local');
+  env.sandbox.__sgBypass = false;
+
+  const ta2 = new StubElement('textarea', new Map());
+  const ev2 = keydownEvent(ta2, SECRET);
+  for (const fn of env.listeners.keydown) fn(ev2);
+  assert.ok(ta2.value.includes('sk-proj'), 'the revoked tab must no longer auto-redact');
+  assert.ok(env.appended.find((el) => el.id === 'sg-overlay'), 'it must fall back to the modal');
+});
+
+test('both Pro flags together do unlock auto-redact', () => {
+  const env = loadContentScript({ storageRes: PRO_AUTO });
+  const ta = new StubElement('textarea', new Map());
+  const event = keydownEvent(ta, SECRET);
+  for (const fn of env.listeners.keydown) fn(event);
+
+  assert.equal(event.prevented, true);
+  assert.ok(!ta.value.includes('sk-proj'), 'auto-redact runs when both flags are set');
+  assert.ok(ta.value.includes('[API_KEY'), 'placeholder written');
+});
+
+test('protection stays off until a settings record says it is on', () => {
+  // The welcome page is where protection is accepted. A content script that
+  // injects before onInstalled has written the defaults, or when storage is
+  // briefly empty, must not start scanning: the initial enabled flag used to
+  // be true, which ran detection before any consent at all.
+  const env = loadContentScript({ storageRes: {} });
+  const ta = new StubElement('textarea', new Map());
+  const event = keydownEvent(ta, SECRET);
+  for (const fn of env.listeners.keydown) fn(event);
+
+  assert.equal(event.prevented, false, 'nothing may be intercepted before consent');
+  assert.equal(env.appended.find((el) => el.id === 'sg-overlay'), undefined, 'no modal');
 });

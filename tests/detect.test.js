@@ -488,3 +488,152 @@ test('national ID checksums accept published test vectors', () => {
     assert.ok(names(sample, FULL).includes(want), want + ' missed for ' + sample);
   }
 });
+
+test('previews never hand the secret to the page DOM', () => {
+  // The preview is written into #sg-overlay, which any script on the site can
+  // read. previewOf used to return the whole value for anything up to 24
+  // characters, so a US SSN, a card number or a codice fiscale was printed
+  // in full to the very site the user was declining to send it to.
+  for (const s of ['123-45-6789', '4111111111111111', 'RSSMRA85M12F205X', 'Tr0ub4dor']) {
+    const p = D.previewOf(s);
+    assert.ok(!p.includes(s), `full value printed for ${s}: ${p}`);
+    for (let i = 0; i + 3 <= s.length; i++) {
+      assert.ok(
+        !p.includes(s.slice(i, i + 3)),
+        `fragment ${JSON.stringify(s.slice(i, i + 3))} of ${s} leaked as ${JSON.stringify(p)}`
+      );
+    }
+  }
+});
+
+test('a long key keeps two characters at each end and nothing more', () => {
+  const key = 'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789';
+  const p = D.previewOf(key);
+  assert.equal(p, 'sk…89');
+  assert.equal(p.replace(/[^A-Za-z0-9]/g, '').length, 4, 'at most four characters survive');
+});
+
+test('previewOf on empty input returns nothing', () => {
+  assert.equal(D.previewOf(''), '');
+  assert.equal(D.previewOf(undefined), '');
+});
+
+const PII_OPTS = {
+  enabled: true,
+  categories: { apiKeys: true, pii: true, network: true },
+  isPro: true, entitled: true, customPatterns: [],
+};
+const foundNames = (s) => D.scan(s, PII_OPTS).map((f) => f.name);
+
+test('Irish PPS: the check letter is the one verified, and the second letter is not always weighted', () => {
+  // Vectors from stdnum.ie.pps. The old code put weight 9 on the check letter
+  // and ignored the second letter, so every verdict was inverted.
+  for (const good of ['6433435F', '6433435FT', '6433435FW', '6433435OA', '6433435IH']) {
+    assert.equal(D.checksums.pps(good), true, good + ' must be accepted');
+  }
+  assert.equal(D.checksums.pps('6433435G'), false, 'a wrong check letter must be rejected');
+  assert.equal(D.checksums.pps('1234567A'), false, '1234567 checks to T, not A');
+  assert.equal(D.checksums.pps('6433435FZ'), false, 'Z is not a valid second letter');
+});
+
+test('JSON config: a quoted key still reaches the keyword rules', () => {
+  // JSON puts a quote between the key and the colon. Both rules needed
+  // `keyword[ \t]*[:=]`, so pasting a JSON config leaked passwords silently.
+  for (const line of ['{"password": "Tr0ub4dor"}', '{"token": "abcdefghijklmnop"}', '{"secret": "s3cret-value-here"}']) {
+    assert.ok(foundNames(line).length > 0, 'nothing matched for ' + line);
+  }
+  assert.ok(foundNames('{"password": "Tr0ub4dor"}').some(n => /password/i.test(n)));
+});
+
+test('hand-typed lowercase PII is caught too', () => {
+  // The validators already normalise case, but the gates were case strict, so
+  // a hand-typed lowercase codice fiscale, IBAN or NIF produced no warning.
+  const cases = [
+    ['cstdra91r11f839x', 'Italian codice fiscale'],
+    ['de89370400440532013000', 'IBAN'],
+    ['12345678z', 'Spanish NIF/NIE'],
+    ['abcde1234f', 'Indian PAN card'],
+  ];
+  for (const [sample, want] of cases) {
+    assert.ok(foundNames(sample).includes(want), want + ' missed for ' + sample);
+  }
+});
+
+test('a 40-char secret whose edges are + or / is still matched', () => {
+  // The rule was anchored with \b, and \b sits between a word character and a
+  // non-word one. + and / are both non-word, so a key opening or closing with
+  // either could never satisfy the boundary and matched nothing at all.
+  const awsRule = D.PATTERNS.find(p => p.name === 'AWS Secret Access Key');
+  assert.ok(awsRule, 'the AWS rule must exist');
+  const run = (s) => new RegExp(awsRule.re.source, awsRule.re.flags).test(s);
+  const mk = (prefix, suffix) => {
+    const need = 40 - prefix.length - suffix.length;
+    const FILL = 'aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zAb'.repeat(2);
+    return prefix + FILL.slice(0, need) + suffix;
+  };
+  for (const [prefix, suffix] of [['+', '/'], ['/', '+'], ['', ''], ['+', '+'], ['/', '/']]) {
+    const s = mk(prefix, suffix);
+    assert.equal(s.length, 40, 'fixture must be exactly 40 characters: ' + s);
+    assert.ok(run(s), 'not matched: ' + s);
+  }
+  // A plain hex run is still excluded: those are git SHAs and hashes.
+  assert.equal(run('a'.repeat(40)), false);
+});
+
+test('isHighEntropyToken keeps base64 that happens to contain a slash', () => {
+  // The old guard rejected every token with a / in it, which threw away
+  // standard-alphabet base64 secrets along with the URLs.
+  assert.equal(D.isHighEntropyToken('aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5/zAb'), true);
+  assert.equal(D.isHighEntropyToken('https://example.com/very/long/path/here'), false);
+  assert.equal(D.isHighEntropyToken('docs/readme.md'), false);
+  assert.equal(D.isHighEntropyToken('aaa/bbb/ccc/ddd/eee'), false);
+});
+
+test('custom patterns with nested quantifiers are refused, not run', () => {
+  // (a+)+$ against forty characters did not finish in fifteen seconds. Team
+  // policy can push one pattern to every seat, so the shape is refused at
+  // compile time rather than survived at match time.
+  const opts = { ...PII_OPTS, customPatterns: ['(a+)+$'] };
+  const started = Date.now();
+  const out = D.scan('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', opts);
+  assert.ok(Date.now() - started < 2000, 'a catastrophic pattern must not be run');
+  assert.equal(out.filter(f => f.name === 'Custom pattern').length, 0);
+});
+
+test('a well formed custom pattern still matches', () => {
+  const opts = { ...PII_OPTS, customPatterns: ['corp-[0-9]{4}-[a-f]{8}'] };
+  assert.ok(D.scan('token corp-1234-deadbeef end', opts).some(f => f.name === 'Custom pattern'));
+  const bad = { ...PII_OPTS, customPatterns: ['([unclosed'] };
+  assert.equal(D.scan('anything at all', bad).filter(f => f.name === 'Custom pattern').length, 0);
+});
+
+test('placeholder numbers never alert as identity documents', () => {
+  // A weighted sum of zeros is zero, so all-zero padding sailed through most
+  // of the checksums and fired high-severity identity warnings on fixtures.
+  for (const s of ['0000000000000', '000000-0000', '000-000-000', '00000000000', '000000000000', '00-00000000-0', '000000-00000']) {
+    assert.equal(foundNames(s).length, 0, 'placeholder alerted as PII: ' + s);
+  }
+});
+
+test('US SSN rejects the numbers that are never issued', () => {
+  assert.ok(foundNames('123-45-6789').includes('US SSN'));
+  for (const bad of ['000-00-0000', '666-12-3456', '999-99-9999', '123-00-6789', '123-45-0000']) {
+    assert.ok(!foundNames(bad).includes('US SSN'), 'never-issued SSN alerted: ' + bad);
+  }
+});
+
+test('Swedish personnummer reaches its twelve digit form', () => {
+  // validPersonnummer has always handled twelve digits, but the pattern only
+  // ever delivered ten, so that branch was dead and YYYYMMDDNNNN from a data
+  // export was never matched at all.
+  const pn = D.PATTERNS.find(p => p.name === 'Swedish personnummer');
+  assert.ok(pn.re.test('19850101-1234'), 'the 12-digit form must reach the pattern');
+  assert.ok(pn.re.test('850101-1234'), 'the 10-digit form still reaches it');
+});
+
+test('luhn and the Dutch BSN do not reject on a zero checksum', () => {
+  assert.equal(D.luhn(''), false, 'an empty string is not a valid card');
+  // 000000012 has a weighted sum of exactly zero and is a genuine BSN.
+  assert.equal(D.checksums.bsn('000000012'), true);
+  assert.equal(D.checksums.bsn('00000000'), false, 'all-zero is still a placeholder');
+});

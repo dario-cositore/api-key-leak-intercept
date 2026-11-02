@@ -37,8 +37,12 @@
     { name: 'OpenAI API key', sev: 'high', cat: 'api', confidence: 'high', re: /\bsk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{20,}\b/i },
     { name: 'Anthropic API key', sev: 'high', cat: 'api', confidence: 'high', re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/i },
     { name: 'AWS Access Key ID', sev: 'high', cat: 'api', confidence: 'high', re: /\bAKIA[0-9A-Z]{16}\b/i },
-    // 40-char run, but not a plain hex string (git SHA-1 / hashes are hex)
-    { name: 'AWS Secret Access Key', sev: 'high', cat: 'api', confidence: 'low', re: /\b(?![0-9a-fA-F]{40}\b)[A-Za-z0-9/+=]{40}\b/, valid: (raw) => hasMixedClasses(raw) && shannon(raw) >= ENTROPY_MIN },
+    // 40-char run, but not a plain hex string (git SHA-1 / hashes are hex).
+    // The boundaries are lookarounds, not \b: \b sits between a word and a
+    // non-word character, so a key that starts or ends with + or / could never
+    // satisfy it and matched nothing at all. Roughly six percent of real AWS
+    // secret keys are base64 of thirty bytes and end in one of those two.
+    { name: 'AWS Secret Access Key', sev: 'high', cat: 'api', confidence: 'low', re: /(?<![A-Za-z0-9/+=])(?![0-9a-fA-F]{40}(?![A-Za-z0-9/+=]))[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/, valid: (raw) => hasMixedClasses(raw) && shannon(raw) >= ENTROPY_MIN },
     { name: 'GitHub token', sev: 'high', cat: 'api', confidence: 'high', re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/i },
     { name: 'Stripe secret key', sev: 'high', cat: 'api', confidence: 'high', re: /\bsk_(?:live|test)_[A-Za-z0-9]{24,}\b/i },
     { name: 'Stripe restricted key', sev: 'high', cat: 'api', confidence: 'high', re: /\brk_(?:live|test)_[A-Za-z0-9]{24,}\b/i },
@@ -58,19 +62,26 @@
     { name: 'Bearer token', sev: 'high', cat: 'api', confidence: 'high', re: /\bBearer\s+[A-Za-z0-9._-]{20,}\b/i },
     { name: 'Database connection string', sev: 'high', cat: 'api', confidence: 'high', re: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^\s:\/@]*:[^\s@]+@[^\s'"<>]+/i },
     { name: '.env file block', sev: 'high', cat: 'api', confidence: 'high', re: /(?<![^\n])[ \t]*[A-Z][A-Z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s,;()'"]+)[ \t]*\r?(?=\n|$)(?:\n[ \t]*[A-Z][A-Z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s,;()'"]+)[ \t]*\r?(?=\n|$)){2,}/ },
-    { name: 'Password assignment', sev: 'med', cat: 'api', confidence: 'low', re: /(?<![A-Za-z0-9])(?:password|passwd|pwd|secret)[ \t]*(?:=[ \t]*(?:"[^"'\r\n]{6,}"|'[^'"\r\n]{6,}'|(?![^\s"'`]*[.(\[])[^\s"'`]{6,})|:[ \t]*(?:"[^"'\r\n]{6,}"|'[^'"\r\n]{6,}'|(?![^\s"'`]*[.(\[])(?=[^\s"'`]*[0-9@#$%^&*+=\-/\\|~])[^\s"'`]{6,}))/i },
-    { name: 'Generic secret assignment', sev: 'med', cat: 'api', confidence: 'low', re: /\b(?:api[_-]?key|secret|token|password|passwd|pwd)\s*[:=]\s*["']?[A-Za-z0-9_\-/+=]{16,}["']?/i },
+    { name: 'Password assignment', sev: 'med', cat: 'api', confidence: 'low', re: /(?<![A-Za-z0-9])(?:password|passwd|pwd|secret)[ \t"']*(?:=[ \t]*(?:"[^"'\r\n]{6,}"|'[^'"\r\n]{6,}'|(?![^\s"'`]*[.(\[])[^\s"'`]{6,})|:[ \t]*(?:"[^"'\r\n]{6,}"|'[^'"\r\n]{6,}'|(?![^\s"'`]*[.(\[])(?=[^\s"'`]*[0-9@#$%^&*+=\-/\\|~])[^\s"'`]{6,}))/i },
+    { name: 'Generic secret assignment', sev: 'med', cat: 'api', confidence: 'low', re: /\b(?:api[_-]?key|secret|token|password|passwd|pwd)["']?\s*[:=]\s*["']?[A-Za-z0-9_\-/+=]{16,}["']?/i },
     // --- PII (Pro) ---
     { name: 'Email address', sev: 'med', cat: 'pii', confidence: 'high', re: /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/ },
-    { name: 'US SSN', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{3}-\d{2}-\d{4}\b/ },
+    { name: 'US SSN', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{3}-\d{2}-\d{4}\b/, valid: (raw) => {
+      const m = raw.replace(/\D/g, '').match(/^(\d{3})(\d{2})(\d{4})$/);
+      if (!m) return false;
+      // Area 000, 666 and 900-999 are never issued, and neither is group 00
+      // or serial 0000. Without these 000-00-0000 and 999-99-9999 both
+      // alerted at high severity as real social security numbers.
+      return m[1] !== '000' && m[1] !== '666' && Number(m[1]) < 900 && m[2] !== '00' && m[3] !== '0000';
+    } },
     { name: 'Credit card number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b(?:\d[ -]*?){14,19}\b/, valid: (raw) => {
       const digits = raw.replace(/\D/g, '');
       return digits.length >= 13 && digits.length <= 19 && !/^(\d)\1+$/.test(digits) && luhn(digits);
     } },
     { name: 'US phone number', sev: 'med', cat: 'pii', confidence: 'high', re: /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/ },
     { name: 'EU phone number', sev: 'med', cat: 'pii', confidence: 'high', re: /\+(?:39|44|49|33|34)(?:[ .()-]{0,2}\d){6,12}(?!\d)/ },
-    { name: 'IBAN', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b/, valid: validIban },
-    { name: 'Italian codice fiscale', sev: 'med', cat: 'pii', confidence: 'high', re: /\b[A-Z]{6}\d{2}[ABCDEHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b/, valid: validCodiceFiscale },
+    { name: 'IBAN', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b/i, valid: validIban },
+    { name: 'Italian codice fiscale', sev: 'med', cat: 'pii', confidence: 'high', re: /\b[A-Z]{6}\d{2}[ABCDEHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b/i, valid: validCodiceFiscale },
     { name: 'Italian partita IVA', sev: 'med', cat: 'pii', confidence: 'high', re: /\b(?:p\.?\s?iva|partita\s+iva|vat)[\s:#.-]*(?:IT\s?)?\d{11}\b/i, valid: validPartitaIva },
     // --- National identity numbers (Pro) ---
     { name: 'Indian Aadhaar number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{4}[ -]?\d{4}[ -]?\d{4}\b/, valid: validVerhoeff },
@@ -81,7 +92,7 @@
     { name: 'German tax ID (Steuer-ID)', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[1-9]\d{10}\b/, valid: validSteuerId },
     { name: 'German VAT ID', sev: 'med', cat: 'pii', confidence: 'high', re: /\bDE ?[1-9]\d{8}\b/i, valid: validUstId },
     { name: 'French NIR (social security)', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[123478]\s?\d{2}\s?(?:0[1-9]|1[0-2]|20)\s?\d{2}\s?\d{3}\s?\d{3}\s?\d{2}\b/, valid: validNir },
-    { name: 'Spanish NIF/NIE', sev: 'high', cat: 'pii', confidence: 'high', re: /\b(?:\d{8}|[XYZ]\d{7})[ -]?[A-Z]\b/, valid: validNifEs },
+    { name: 'Spanish NIF/NIE', sev: 'high', cat: 'pii', confidence: 'high', re: /\b(?:\d{8}|[XYZ]\d{7})[ -]?[A-Z]\b/i, valid: validNifEs },
     { name: 'Argentine CUIL', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{2}[ -]\d{8}[ -]\d\b/, valid: validCuil },
     { name: 'Chilean RUT', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{1,2}\.?\d{3}\.?\d{3}-?[0-9Kk]\b/, valid: validRut },
     { name: 'South African ID number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{13}\b/, valid: (raw) => luhn(raw) },
@@ -91,14 +102,14 @@
     { name: 'Japanese My Number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{12}\b/, valid: validMyNumber },
     { name: 'Dutch BSN', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{9}\b/, valid: validBsn },
     { name: 'Polish PESEL', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{11}\b/, valid: validPesel },
-    { name: 'Swedish personnummer', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{6}[+-]?\d{4}\b/, valid: validPersonnummer },
+    { name: 'Swedish personnummer', sev: 'high', cat: 'pii', confidence: 'high', re: /\b(?:\d{8}[+-]?\d{4}|\d{6}[+-]?\d{4})\b/, valid: validPersonnummer },
     { name: 'Danish CPR number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{6}-?\d{4}\b/, valid: validCpr },
     { name: 'Norwegian fødselsnummer', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{6}[ -]?\d{5}\b/, valid: validFodselsnummer },
     { name: 'Finnish hetu', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{6}[-+A]\d{3}[0-9A-Y]\b/, valid: validHetu },
-    { name: 'Irish PPS number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{7}[A-W][A-I]?\b/, valid: validPps },
+    { name: 'Irish PPS number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{7}[A-W][ABHWTX]?\b/i, valid: validPps },
     { name: 'Portuguese NIF', sev: 'high', cat: 'pii', confidence: 'high', re: /\b\d{9}\b/, valid: validNifPt },
-    { name: 'UK National Insurance number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[A-CEGHJ-PR-TW-Z]{2}\d{6}[A-D]\b/ },
-    { name: 'Indian PAN card', sev: 'med', cat: 'pii', confidence: 'high', re: /\b[A-Z]{5}\d{4}[A-Z]\b/ },
+    { name: 'UK National Insurance number', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[A-CEGHJ-PR-TW-Z]{2}\d{6}[A-D]\b/i },
+    { name: 'Indian PAN card', sev: 'med', cat: 'pii', confidence: 'high', re: /\b[A-Z]{5}\d{4}[A-Z]\b/i },
     { name: 'Mexican CURP', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[A-Z]{4}\d{6}[HMX][A-Z]{5}[0-9A-Z]\d\b/i, valid: validCurp },
     { name: 'Mexican RFC', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[A-Z]{3,4}\d{6}[A-Z0-9&]{2}[0-9A]\b/i, valid: validRfc },
     { name: 'Singapore NRIC / FIN', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[STFG]\d{7}[A-Z]\b/i, valid: validNric },
@@ -122,6 +133,19 @@
     return h;
   }
 
+  // A run of one repeated digit is a placeholder, not a number. "SIN: 000-000-000",
+  // padding and test fixtures all pass a weighted checksum, because a weighted
+  // sum of zeros is zero, and they alerted at high severity as identity
+  // documents. Three of the ~20 validators already checked for this; the rest
+  // did not, so the guard lives here and covers all of them.
+  //
+  // Only the whole value counts. A secret that merely ends in repeated digits
+  // ("pwd: hunter22") is not a placeholder and must still be caught.
+  function isDegenerate(raw) {
+    const d = String(raw || '').replace(/[\s.\-+()/]/g, '');
+    return d.length > 0 && /^(\d)\1+$/.test(d);
+  }
+
   function hasMixedClasses(s) {
     return /[a-z]/.test(s) && /[A-Z]/.test(s) && /\d/.test(s);
   }
@@ -130,6 +154,7 @@
   /* Checksums                                                           */
   /* ------------------------------------------------------------------ */
   function luhn(num) {
+    if (!num || !num.length) return false;
     let sum = 0, alt = false;
     for (let i = num.length - 1; i >= 0; i--) {
       let n = parseInt(num[i], 10);
@@ -141,7 +166,9 @@
 
   // ISO 13616 mod-97 check (letters A=10 ... Z=35)
   function validIban(raw) {
-    const s = raw.replace(/ /g, '');
+    // Uppercase first: the mod-97 loop maps A-Z to 10-35 and reads anything
+    // else as a digit, so a lowercase letter became NaN and failed every time.
+    const s = raw.replace(/ /g, '').toUpperCase();
     const rearranged = s.slice(4) + s.slice(0, 4);
     let r = 0;
     for (const ch of rearranged) {
@@ -311,26 +338,39 @@
   }
 
   // Ireland PPS number: mod 23 letter check
+  // Irish PPS: seven digits, a check letter at position 8, and an optional
+  // second letter. The check letter is the one being verified, so the weight 9
+  // belongs to the second letter and only for the pre-2013 forms A, B and H.
+  // The post-2013 letters T, W and X carry no weight. Weights on the digits
+  // run 8,7,6,5,4,3,2 and the sum maps onto the 23 letters below with W at
+  // index zero. The old code put the weight on the check letter and ignored
+  // the second letter entirely, which inverted every verdict: real numbers
+  // were rejected and invented ones alerted at high severity.
+  const PPS_CHECK = 'WABCDEFGHIJKLMNOPQRSTUV';
   function validPps(raw) {
     const s = raw.replace(/[\s-]/g, '').toUpperCase();
-    const m = s.match(/^(\d{7})([A-W])([A-I]?)$/);
+    const m = s.match(/^(\d{7})([A-W])([ABHWTX]?)$/);
     if (!m) return false;
     const w = [8, 7, 6, 5, 4, 3, 2];
     let sum = 0;
     for (let i = 0; i < 7; i++) sum += Number(m[1][i]) * w[i];
-    sum += (m[2].charCodeAt(0) - 64) * 9;
-    return sum % 23 === 0;
+    if (m[3] && /[ABH]/.test(m[3])) sum += (m[3].charCodeAt(0) - 64) * 9;
+    return PPS_CHECK[sum % 23] === m[2];
   }
 
   // Netherlands BSN: mod 11
   function validBsn(raw) {
     const s = raw.replace(/\D/g, '');
     if (!/^\d{8,9}$/.test(s)) return false;
+    // A genuine BSN can have a weighted sum of exactly zero. Testing sum !== 0
+    // rejected those along with the placeholders, so the placeholder check is
+    // explicit and the checksum is left to do its own job.
+    if (/^(\d)\1+$/.test(s)) return false;
     const t = s.length === 8 ? '0' + s : s;
     let sum = 0;
     for (let i = 0; i < 8; i++) sum += Number(t[i]) * (9 - i);
     sum -= Number(t[8]);
-    return sum !== 0 && sum % 11 === 0;
+    return sum % 11 === 0;
   }
 
   // Poland PESEL: weighted mod 10
@@ -519,7 +559,15 @@
   // Filters human-readable strings (URLs, file paths, kebab/snake slugs)
   // out of the catch-all entropy check, which reports one finding at a time.
   function isHighEntropyToken(t) {
-    if (t.includes('/')) return false;                       // url or path fragment
+    // A single slash is ordinary in standard-alphabet base64. Rejecting every
+    // slash threw those secrets away along with the URLs, so the safety net
+    // missed roughly half of all base64 keys. Only reject what actually looks
+    // like a path. The scheme test is an indexOf, not a pattern: a regex that
+    // runs [a-z0-9+.-]* against a long token backtracks quadratically and took
+    // twenty-two seconds over one window of a megabyte file.
+    if (t.includes('://')) return false;                        // a URL
+    if ((t.match(/\//g) || []).length >= 2) return false;       // a path
+    if (t.includes('/') && /\.\w{1,6}$/.test(t)) return false;  // file path
     if (!/[0-9+/=]/.test(t)) return false;                   // plain word runs are never secrets
     if (/^[a-f0-9]{32,}$/i.test(t)) return false;            // looks like a hash
     if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(t)) return false; // UUID
@@ -555,12 +603,37 @@
     return hasProCapabilities(opts);
   }
 
+  // Compiles an admin-supplied pattern, or returns null when it must not run.
+  //
+  // A nested quantifier is what makes a pattern catastrophically slow: one
+  // written as (a+)+$ did not finish against forty characters in fifteen
+  // seconds, which hangs the tab on every keystroke and send. Team policy can
+  // push one careless pattern to every seat, so the shape is refused here
+  // rather than survived at match time. A malformed pattern is refused for the
+  // same reason: quietly not matching beats freezing the page.
+  function compileCustomPattern(cp) {
+    if (typeof cp !== 'string' || cp.length > 2000) return null;
+    // A quantified group that itself carries a quantifier: (a+)+, (\d*)*, (x{2,})+
+    if (/\([^()]*(?:[+*]|\{\d+,?\d*\})[^()]*\)\s*(?:[+*]|\{\d+,?\d*\})/.test(cp)) return null;
+    try { return new RegExp(cp, 'g'); } catch (e) { return null; }
+  }
+
   function globalRe(re) {
     return re.global ? re : new RegExp(re.source, re.flags + 'g');
   }
 
+  // The preview is rendered into the page DOM, where any script on the site
+  // can read it, so it must never carry the secret. Short values are shown as
+  // bullets throughout; long ones keep two characters at each end, which is
+  // enough to tell one finding from another in the list. Anything longer hands
+  // over a usable fragment: a US SSN, a card number or a codice fiscale used
+  // to be printed here in full because they are all under 24 characters.
   function previewOf(raw) {
-    return raw.length > 24 ? raw.slice(0, 12) + '…' + raw.slice(-6) : raw;
+    const s = String(raw || '');
+    if (!s) return '';
+    return s.length < 16
+      ? '•'.repeat(Math.min(s.length, 12))
+      : s.slice(0, 2) + '…' + s.slice(-2);
   }
 
   // Overlap priority: when two matches share characters, the higher rank is
@@ -632,16 +705,15 @@
         if (!categoryAllowed(p, o)) continue;
         for (const m of s.matchAll(globalRe(p.re))) {
           if (hits.length >= MAX_FINDINGS) { done = true; return; }
-          if (!m[0] || (p.valid && !p.valid(m[0]))) continue;
+          if (!m[0] || isDegenerate(m[0]) || (p.valid && !p.valid(m[0]))) continue;
           add(p.name, p.sev, m[0], off + m.index, undefined, p.confidence);
         }
       }
       // Custom patterns (Pro or Team), length- and count-capped
       if (customPatternsAllowed(o)) {
         for (const cp of (o.customPatterns || []).slice(0, 50)) {
-          if (typeof cp !== 'string' || cp.length > 2000) continue;
-          let re;
-          try { re = new RegExp(cp, 'g'); } catch (e) { continue; }
+          const re = compileCustomPattern(cp);
+          if (!re) continue;
           for (const m of s.matchAll(re)) {
             if (hits.length >= MAX_FINDINGS) { done = true; return; }
             if (m[0]) add('Custom pattern', 'high', m[0], off + m.index, undefined, 'high');
@@ -654,7 +726,7 @@
           if (hits.length >= MAX_FINDINGS) { done = true; return; }
           const t = m[0];
           if (!isHighEntropyToken(t)) continue;
-          add('High-entropy token', 'med', t, off + m.index, t.slice(0, 8) + '…' + t.slice(-4), 'low');
+          add('High-entropy token', 'med', t, off + m.index, previewOf(t), 'low');
         }
       }
     });
@@ -726,16 +798,15 @@
       for (const p of PATTERNS) {
         if (!categoryAllowed(p, o)) continue;
         for (const m of s.matchAll(globalRe(p.re))) {
-          if (!m[0] || (p.valid && !p.valid(m[0]))) continue;
+          if (!m[0] || isDegenerate(m[0]) || (p.valid && !p.valid(m[0]))) continue;
           addSpan(p.name, p.sev, m[0], off + m.index, p.confidence);
         }
       }
       // Custom patterns
       if (customPatternsAllowed(o)) {
         for (const cp of (o.customPatterns || []).slice(0, 50)) {
-          if (typeof cp !== 'string' || cp.length > 2000) continue;
-          let re;
-          try { re = new RegExp(cp, 'g'); } catch (e) { continue; }
+          const re = compileCustomPattern(cp);
+          if (!re) continue;
           for (const m of s.matchAll(re)) {
             if (m[0]) addSpan('Custom pattern', 'high', m[0], off + m.index, 'high');
           }
@@ -794,6 +865,7 @@
     ENTROPY_MIN,
     isHighEntropyToken,
     isTextLikeFile,
+    previewOf,
     categoryAllowed,
     customPatternsAllowed,
     checksums: {

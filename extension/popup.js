@@ -454,10 +454,12 @@
     };
   }
 
-  function save() {
+  function save(cb) {
     const s = collectSettings();
     settings = { ...settings, ...s };
-    chrome.runtime.sendMessage({ type: 'saveSettings', settings: s }, () => {});
+    chrome.runtime.sendMessage({ type: 'saveSettings', settings: s }, (res) => {
+      if (typeof cb === 'function') cb(res);
+    });
   }
 
   function saveTeam() {
@@ -538,10 +540,17 @@
     if (Array.isArray(obj.extraSites)) org.extraSites = obj.extraSites;
     if (typeof obj.heartbeat === 'boolean') org.heartbeat = obj.heartbeat;
     if (typeof obj.blockSendAnyway === 'boolean') org.blockSendAnyway = obj.blockSendAnyway;
-    if (typeof obj.autoRedact === 'boolean') { settings.autoRedact = obj.autoRedact; }
+    // Write the checkbox as well as the variable. collectSettings reads the
+    // DOM, so setting the local flag alone was overwritten by save() on the
+    // next line and an admin's autoRedact:true silently never applied.
+    if (typeof obj.autoRedact === 'boolean') { settings.autoRedact = obj.autoRedact; $('sgp-auto-redact').checked = obj.autoRedact; }
     saveTeam();
-    save();
-    showToast('Setup code applied.');
+    save((res) => {
+      // Report what actually happened. The toast used to fire before either
+      // write, so a failed or half-applied code still said "Setup code applied."
+      if (res && res.ok) showToast('Setup code applied.');
+      else showToast('Setup code could not be applied. Check the settings below.', 'warn');
+    });
   });
 
   $('sgp-copy-diagnostics').addEventListener('click', () => {

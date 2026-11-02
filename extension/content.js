@@ -92,7 +92,11 @@
   /* State                                                              */
   /* ------------------------------------------------------------------ */
   let settings = {
-    enabled: true,
+    // Off until the record says otherwise. Starting on meant a content script
+    // that injected into an already-open tab before onInstalled had written
+    // the defaults ran detection before the welcome page was ever accepted,
+    // which is the one thing the consent gate exists to prevent.
+    enabled: false,
     categories: { apiKeys: true, pii: false, network: false },
     customPatterns: [],
     autoRedact: false,
@@ -141,9 +145,13 @@
           settings.autoRedact = !!settings.autoRedact;
         }
         if (typeof res.sg_leaks_stopped === 'number') leaksStopped = res.sg_leaks_stopped;
-        // sg_isPro is the single source of truth (set by the service worker
-        // after verification, cleared after a definitive revocation)
-        if (res.sg_isPro && res.sg_license_key) settings.isPro = true;
+        // Both flags together: the Pro capability and the licence key that
+        // proves a verification happened. Derived fresh on every load rather
+        // than set true and left there, because the spread above carries a
+        // stale true forward for the life of the tab. That kept PII scanning,
+        // custom patterns, redaction and universal mode running in open tabs
+        // after a sign-out or a revocation, while the popup already said Free.
+        settings.isPro = !!(res.sg_isPro && res.sg_license_key);
         settings.hideProHint = !!res.sg_hide_pro_hint;
         // an expired signed config reverts to the bundled defaults
         const cfgExpired = typeof res.sg_config_exp === 'number' && res.sg_config_exp * 1000 <= Date.now();
@@ -200,6 +208,17 @@
                 if (Array.isArray(m.customPatterns)) settings.customPatterns = m.customPatterns;
                 settings.enforceJustification = m.enforceJustification === true;
                 if (typeof m.autoRedact === 'boolean') settings.autoRedact = m.autoRedact;
+                // detectPii and detectNetwork are documented as standalone
+                // policy toggles, so they apply whether or not the panel is
+                // locked. Sitting inside the lockSettings branch meant an admin
+                // who switched PII on without also locking the settings got no
+                // PII scanning at all: the key did literally nothing.
+                if (typeof m.detectPii === 'boolean') {
+                  settings.categories = { ...settings.categories, pii: m.detectPii };
+                }
+                if (typeof m.detectNetwork === 'boolean') {
+                  settings.categories = { ...settings.categories, network: m.detectNetwork };
+                }
                 if (m.lockSettings === true) {
                   settings.lockSettings = true;
                   // Policy lock: local pause and category switches are ignored
@@ -280,6 +299,14 @@
     return '';
   }
 
+  /**
+   * Writes text into an editor and reports whether the editor's own state is
+   * known to hold it. True for the native setter and for an execCommand write
+   * that read back clean. False when only the DOM changed: framework editors
+   * (Lexical, ProseMirror, the ChatGPT composer among them) submit their model
+   * rather than their markup, so a forced textContent can look redacted and
+   * still send the original text. Callers must never auto-send on a false.
+   */
   function setText(el, text) {
     const tag = (el.tagName || '').toLowerCase();
     if (tag === 'textarea' || tag === 'input') {
@@ -289,6 +316,7 @@
       setter.call(el, text);
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
     } else if (el.isContentEditable) {
       el.focus();
       let replaced = false;
@@ -306,32 +334,35 @@
         const partial = covered && current && covered !== current;
         if (!partial) replaced = document.execCommand('insertText', false, text);
       } catch (e) {}
-      if (!replaced || getText(el) !== text) {
-        // framework editors (Lexical, ProseMirror) can silently ignore
-        // execCommand; force the DOM and announce the change
-        try {
-          el.textContent = text;
-          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: text }));
-        } catch (e) {
-          try { el.innerText = text; } catch (e2) {}
-        }
+      if (replaced && getText(el) === text) return true;
+      // execCommand was ignored or the read-back disagrees. Force the DOM and
+      // announce the change so the user sees the redaction, but say the write
+      // is untrusted: the editor's own state may still carry the secret.
+      try {
+        el.textContent = text;
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: text }));
+      } catch (e) {
+        try { el.innerText = text; } catch (e2) {}
       }
+      return false;
     }
+    return false;
   }
 
-  // Writes text and only reports success when none of the original secrets
-  // survive in the editor. Never trust a write that was not verified.
+  // Writes text and only reports success when the editor really holds the
+  // redaction: the write reached the editor's own state, none of the original
+  // secrets survive, and the placeholder is in there. An empty read-back is
+  // never clean (contenteditables can report nothing while the submitted text
+  // still carries the secret). A write that only landed in the DOM is a
+  // failure here, so auto-send never fires on one.
   function writeBack(el, text, secrets) {
     if (!el) return false;
-    setText(el, text);
+    const trusted = setText(el, text);
     const now = getText(el);
-    // The write only counts if the editor really holds the redaction. An empty
-    // read-back is never clean (contenteditables can report nothing while the
-    // submitted text still carries the secret), the secret must be gone, and
-    // the placeholder has to be in there.
     if (!now.trim()) return false;
     if ((secrets || []).some(s => s && now.includes(s))) return false;
-    return /\[[A-Z][A-Z0-9_]*_\d+\]/.test(now);
+    if (!/\[[A-Z][A-Z0-9_]*_\d+\]/.test(now)) return false;
+    return trusted;
   }
 
   function findInputEl(startEl) {
@@ -339,29 +370,66 @@
     let el = startEl;
     for (let i = 0; i < 6 && el; i++) {
       if (isEditable(el)) return el;
-      const ta = el.querySelector && el.querySelector('textarea, [contenteditable="true"]');
+      const ta = el.querySelector && el.querySelector('textarea, [contenteditable]:not([contenteditable="false"])');
       if (ta) return ta;
       el = el.parentElement;
     }
-    // fallback: editable closest to the viewport bottom (chat inputs sit at the bottom)
-    const all = Array.from(document.querySelectorAll('textarea, [contenteditable="true"]'));
+    // fallback: an editable that is actually on screen, closest to the bottom
+    // where chat composers sit. The old selector missed
+    // contenteditable="plaintext-only" and contenteditable="" entirely, and
+    // sorting by rect.top descending picked an editor scrolled far below the
+    // window over the one being typed in, so the scan read text the send would
+    // not have sent and the real secret passed untouched.
+    const all = Array.from(document.querySelectorAll('textarea, [contenteditable]:not([contenteditable="false"])'));
     if (all.length === 0) return null;
-    all.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
-    return all[0];
+    const vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
+    const visible = vh
+      ? all.filter((e2) => { const r = e2.getBoundingClientRect(); return r.bottom > 0 && r.top < vh; })
+      : all;
+    const pool = visible.length ? visible : all;
+    pool.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+    return pool[0];
   }
 
   /* ------------------------------------------------------------------ */
   /* Send interception                                                  */
   /* ------------------------------------------------------------------ */
+  // One selector for every control that can send a message. The click path
+  // used to re-derive the button with `closest('button')` after isSendButton
+  // had already matched a `div[role="button"]`, which made the 1.2.4 role
+  // support dead code: the gate said yes and the handler bailed. Submit
+  // inputs were never matched at all, and `innerText` is empty on inputs.
+  const SENDABLE = 'button, [role="button"], input[type="submit"], input[type="image"]';
+
+  /** Nearest send-ish control, excluding our own overlay and drawer. */
+  function sendButtonOf(el) {
+    if (!el || !el.closest) return null;
+    const btn = el.closest(SENDABLE);
+    if (!btn) return null;
+    if (btn.closest && btn.closest('#sg-overlay, #sg-drawer')) return null;
+    return btn;
+  }
+
   function isSendButton(el) {
-    if (!el) return false;
-    const btn = el.closest && el.closest('button, [role="button"]');
+    const btn = sendButtonOf(el);
     if (!btn) return false;
-    if (btn.closest && btn.closest('#sg-overlay')) return false;
-    const label = (btn.getAttribute('aria-label') || btn.getAttribute('title') || btn.innerText || '').toLowerCase();
+    // A submit control exists to submit, whatever it is labelled.
+    const tag = (btn.tagName || '').toLowerCase();
+    const type = (btn.getAttribute('type') || '').toLowerCase();
+    if (tag === 'input' && (type === 'submit' || type === 'image')) return true;
+    const label = (
+      btn.getAttribute('aria-label') || btn.getAttribute('title') ||
+      btn.getAttribute('value') || btn.innerText || ''
+    ).toLowerCase();
     if (/send|submit/.test(label)) return true;
-    if (btn.getAttribute('data-testid') && /send/i.test(btn.getAttribute('data-testid'))) return true;
-    return false;
+    const tid = btn.getAttribute('data-testid');
+    return !!(tid && /send/i.test(tid));
+  }
+
+  /** An enabled send control to click when a synthetic keypress is ignored. */
+  function findSendControl() {
+    return Array.from(document.querySelectorAll(SENDABLE))
+      .find(b => isSendButton(b) && !b.disabled) || null;
   }
 
   /**
@@ -426,16 +494,19 @@
     if (!pendingSend) return;
     const { inputEl, text, findings, secrets, redactFn, mode } = pendingSend;
     const { text: redacted } = redactText(text);
+    let trusted = true;
     if (redactFn) {
       redactFn(redacted);
     } else if (inputEl) {
-      setText(inputEl, redacted);
+      trusted = setText(inputEl, redacted);
     }
     const now = inputEl ? getText(inputEl) : redacted;
     const leaked = (secrets || []).some(s => s && now.includes(s));
-    if (leaked) {
-      // the editor refused the write: stay in the modal so Cancel still works
-      showToast('Redaction could not be written into this editor. The secret is still in the box, remove it by hand.', 'warn');
+    if (leaked || !trusted) {
+      // The editor refused the write, or only the DOM changed while the
+      // editor's own state may still carry the secret. Stay in the modal so
+      // Cancel still works and the box is never declared clean.
+      showToast('Redaction could not be written into this editor. The secret may still be in the box, remove it by hand.', 'warn');
       return;
     }
     sendAlert(findings, 'redacted');
@@ -497,9 +568,9 @@
         <div class="sg-findings">
           ${findings.map(f => `
             <div class="sg-finding">
-              <span class="sg-sev ${f.sev === 'high' ? 'high' : 'med'}">${f.sev === 'high' ? 'High' : 'Medium'}</span>
+              <span class="sg-sev ${f.sev === 'high' ? 'high' : f.sev === 'low' ? 'low' : 'med'}">${f.sev === 'high' ? 'High' : f.sev === 'low' ? 'Low' : 'Medium'}</span>
               <span class="sg-name">${escapeHtml(f.name)}</span>
-              <span class="sg-preview">${escapeHtml(f.preview)}</span>
+              <span class="sg-preview">${(isPaste || isAttach) ? '' : escapeHtml(f.preview)}</span>
             </div>`).join('')}
           <div class="sg-card-note">Found in your browser. Nothing was sent.</div>
         </div>
@@ -594,7 +665,10 @@
       // origin + path only: query strings can carry tokens
       url: location.origin + location.pathname,
       secretTypes: findings.map(f => f.name),
-      severity: findings.some(f => f.sev === 'high') ? 'high' : 'medium',
+      // Precedence high > medium > low. Rolling up on 'high' alone meant every
+      // finding, including a bare IP address, left as medium.
+      severity: findings.some(f => f.sev === 'high') ? 'high'
+        : findings.some(f => f.sev === 'med' || f.sev === 'medium') ? 'medium' : 'low',
       action: action,
       via: via === 'auto' ? 'auto' : 'manual',
       timestamp: new Date().toISOString(),
@@ -808,16 +882,31 @@
     const secrets = findings.map(f => f.raw).filter(Boolean);
     const sendThrough = () => {
       window.__sgBypass = true;
-      const ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+      // Carry the modifiers the user actually held. A bare Enter is ignored by
+      // Ctrl+Enter and Cmd+Enter send sites, and some of them insert a newline
+      // instead, so "Send anyway" closed the modal and sent nothing at all.
+      const ev = new KeyboardEvent('keydown', {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+        ctrlKey: !!(e && e.ctrlKey), metaKey: !!(e && e.metaKey),
+        bubbles: true, cancelable: true,
+      });
       inputEl.dispatchEvent(ev);
-      setTimeout(() => {
-        if (getText(inputEl).trim() === text.trim()) {
-          const allBtns = Array.from(document.querySelectorAll('button'));
-          const sendBtn = allBtns.find(b => isSendButton(b) && !b.disabled);
-          if (sendBtn) sendBtn.click();
-        }
+      // Watch for the site to take the message by emptying the box. Reaching
+      // for the send button on a fixed forty millisecond timer clicked it after
+      // the message had already gone and sent it twice: a site that clears
+      // asynchronously looks exactly like one that ignored the keypress.
+      const before = getText(inputEl);
+      const deadline = Date.now() + 700;
+      const settle = () => {
+        const now = getText(inputEl);
+        if (now.trim() !== before.trim()) { window.__sgBypass = false; return; }
+        if (Date.now() < deadline) { setTimeout(settle, 75); return; }
+        const sendBtn = findSendControl();
+        if (sendBtn) sendBtn.click();
+        else showToast('Press the site\u2019s send button to send this message.', 'warn');
         setTimeout(() => { window.__sgBypass = false; }, 50);
-      }, 40);
+      };
+      setTimeout(settle, 75);
     };
     if (hasProCap() && settings.autoRedact) {
       try {
@@ -830,24 +919,32 @@
           try { chrome.runtime.sendMessage({ type: 'incrementLeaksStopped' }, (res) => { if (res && typeof res.count === 'number') leaksStopped = res.count; renderWidget(); }); } catch (err) {}
           const before = getText(inputEl);
           window.__sgBypass = true;
-          const ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+          const ev = new KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            ctrlKey: !!(e && e.ctrlKey), metaKey: !!(e && e.metaKey),
+            bubbles: true, cancelable: true,
+          });
           inputEl.dispatchEvent(ev);
-          setTimeout(() => {
-            // Controlled editors can hand the secret back between the write and
-            // the send. If it is back in the box, park behind the modal instead.
+          // Controlled editors can hand the secret back between the write and
+          // the send, and a site that clears the box asynchronously looks
+          // exactly like one that ignored the keypress. Watch for both before
+          // reaching for the send button, so nothing goes out twice and
+          // nothing goes out unredacted.
+          const deadline = Date.now() + 700;
+          const settle = () => {
             const now = getText(inputEl);
             if ((secrets || []).some(s => s && now.includes(s))) {
               window.__sgBypass = false;
               tryIntercept(findings, text, inputEl, sendThrough);
               return;
             }
-            if (now.trim() === before.trim()) {
-              const allBtns = Array.from(document.querySelectorAll('button'));
-              const sendBtn = allBtns.find(b => isSendButton(b) && !b.disabled);
-              if (sendBtn) sendBtn.click();
-            }
+            if (now.trim() !== before.trim()) { window.__sgBypass = false; return; }
+            if (Date.now() < deadline) { setTimeout(settle, 75); return; }
+            const sendBtn = findSendControl();
+            if (sendBtn) sendBtn.click();
             setTimeout(() => { window.__sgBypass = false; }, 50);
-          }, 40);
+          };
+          setTimeout(settle, 75);
           return;
         }
       } catch (err) { /* fall through to the modal, never send unredacted */ }
@@ -866,7 +963,9 @@
     if (window.__sgBypass) return; // our own synthetic send-through
     if (!shouldScan()) return;
     if (!isSendButton(e.target)) return;
-    const btn = e.target.closest('button');
+    // Same selector as isSendButton. Re-deriving with closest('button') here
+    // used to drop every role="button" control the gate had just accepted.
+    const btn = sendButtonOf(e.target);
     if (!btn) return;
     const inputEl = findInputEl(e.target);
     if (!inputEl) return;
@@ -874,6 +973,15 @@
     if (!text.trim()) return;
     const findings = scan(text);
     if (findings.length === 0) return; // native pass-through
+
+    // Scoped to this handler so the auto-redact fallback below can reach it.
+    // It used to reference the keydown handler's sendThrough, which is not
+    // visible here, so the catch laundered a ReferenceError into a fallback.
+    const sendThrough = () => {
+      window.__sgBypass = true;
+      try { btn.click(); } catch (err) {}
+      setTimeout(() => { window.__sgBypass = false; }, 50);
+    };
 
     const secretsC = findings.map(f => f.raw).filter(Boolean);
     if (hasProCap() && settings.autoRedact) {
@@ -905,11 +1013,39 @@
     e.stopPropagation();
     e.stopImmediatePropagation();
 
-    tryIntercept(findings, text, inputEl, () => {
+    tryIntercept(findings, text, inputEl, sendThrough);
+  }, true);
+
+  // Backstop for a form that submits without passing through a send control:
+  // Enter in a plain text input, or a submit whose label the test above did
+  // not recognise. Without this there is no listener covering form submit at
+  // all, so those paths sent with no warning.
+  document.addEventListener('submit', (e) => {
+    if (window.__sgBypass) return; // our own send-through
+    if (!shouldScan()) return;
+    const form = e.target;
+    if (form && form.closest && form.closest('#sg-overlay, #sg-drawer')) return;
+    const inputEl = findInputEl(form) ||
+      (form.querySelector && form.querySelector('textarea, [contenteditable="true"]'));
+    if (!inputEl) return;
+    const text = getText(inputEl);
+    if (!text.trim()) return;
+    const findings = scan(text);
+    if (findings.length === 0) return; // native pass-through
+
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    const submitThrough = () => {
       window.__sgBypass = true;
-      btn.click();
+      try {
+        if (typeof form.requestSubmit === 'function') form.requestSubmit();
+        else form.submit();
+      } catch (err) {}
       setTimeout(() => { window.__sgBypass = false; }, 50);
-    });
+    };
+    tryIntercept(findings, text, inputEl, submitThrough);
   }, true);
 
   /* ------------------------------------------------------------------ */

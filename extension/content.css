@@ -116,6 +116,7 @@
 }
 #sg-modal .sg-finding .sg-sev.high { color: #C0281B; }
 #sg-modal .sg-finding .sg-sev.med  { color: #8E8E93; }
+#sg-modal .sg-finding .sg-sev.low  { color: #AEAEB2; }
 #sg-modal .sg-finding .sg-name {
   flex: none;
   color: #1D1D1F;

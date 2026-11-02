@@ -99,7 +99,7 @@ The Intercept Feed is the record of every catch across the company. It keeps the
 Alongside the feed:
 
 - **Install liveness.** Heartbeats tell you which machines are running the extension and when they last checked in.
-- **Seats.** How many installs report against your plan.
+- **Seats.** How many installs report against your plan. One installed machine takes one seat, so someone running the extension on two computers uses two seats.
 - **Org identity.** Your org ID, the ingest token with rotate, the setup code generator, and the policy JSON export.
 - **Per-install history.** Each machine keeps its own last 100 catches locally, which the employee can read in the popup.
 
