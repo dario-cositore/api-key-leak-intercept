@@ -1,3 +1,36 @@
+
+// Minimal SSRF guard for extension-side fetches to admin-configured endpoints.
+// Mirrors the worker's isBlockedHost for the common private/loopback cases.
+function isSafeOutboundUrlBg(raw) {
+  if (!raw) return false;
+  let u;
+  try { u = new URL(String(raw)); } catch (e) { return false; }
+  if (u.protocol !== 'https:') return false;
+  let host = String(u.hostname || '').toLowerCase();
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  host = host.replace(/\.$/, '');
+  if (!host) return false;
+  if (host === 'localhost' || host.endsWith('.localhost')) return false;
+  if (host.endsWith('.local') || host.endsWith('.internal')) return false;
+  if (host.includes(':')) {
+    if (host === '::1' || host === '0:0:0:0:0:0:0:1' || host === '::' || host === '0:0:0:0:0:0:0:0') return false;
+    const first = host.split(':')[0];
+    if (/^fe[89ab][0-9a-f]$/.test(first) || /^f[cd][0-9a-f]{2}$/.test(first) || host.startsWith('::ffff:')) return false;
+    return true;
+  }
+  const parts = host.split('.');
+  if (parts.length === 4 && parts.every(s => /^\d{1,3}$/.test(s))) {
+    const p = parts.map(Number);
+    if (p[0] === 10) return false;
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return false;
+    if (p[0] === 192 && p[1] === 168) return false;
+    if (p[0] === 169 && p[1] === 254) return false;
+    if (p[0] === 127) return false;
+    if (p[0] === 0) return false;
+  }
+  return true;
+}
+
 /**
  * API Key Leak Intercept: service worker
  *
@@ -153,14 +186,22 @@ function withNormalizedLeaks(cb) {
 // survive a profile repair or a browser update, and when they vanish the daily
 // licence revalidation, the entitlement refresh, the config fetch and the
 // six-hourly seat heartbeat all stop silently until the next extension update.
-// Creating a same-named alarm replaces the old one, so re-asserting on every
-// service worker start is idempotent and costs nothing.
-function ensureAlarms() {
+// Creating a same-named alarm cancels the running one and restarts its
+// countdown, so re-asserting unconditionally on every service worker start
+// reset the 24-hour licence check faster than it could ever fire. Only create
+// what is missing; a running alarm is left exactly as it is.
+function ensureAlarm(name, periodInMinutes) {
   try {
-    chrome.alarms.create('licenseCheck', { periodInMinutes: 1440 });
-    chrome.alarms.create('heartbeat', { periodInMinutes: 360 });
-    chrome.alarms.create('configCheck', { periodInMinutes: 1440 });
+    chrome.alarms.get(name, (existing) => {
+      if (existing) return;
+      try { chrome.alarms.create(name, { periodInMinutes }); } catch (e) {}
+    });
   } catch (e) {}
+}
+function ensureAlarms() {
+  ensureAlarm('licenseCheck', 1440);
+  ensureAlarm('heartbeat', 360);
+  ensureAlarm('configCheck', 1440);
 }
 ensureAlarms();
 
@@ -239,17 +280,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {  if (!msg)
     withNormalizedLeaks((n) => {
       chrome.storage.local.get(['sg_settings', 'sg_isPro', 'sg_license_key', 'sg_license_invalid', 'sg_hide_pro_hint', 'sg_entitlement'], (res) => {
         getEffectiveOrg((org) => {
-          const entitled = SGEntitlement.entitledFrom(res.sg_entitlement, org.orgId);
-          if (SGEntitlement.needsRefresh(res.sg_entitlement, org.orgId) && org.teamMode && org.orgId && org.orgToken) checkEntitlement();
-          sendResponse({
-            settings: res.sg_settings || DEFAULTS.sg_settings,
-            leaksStopped: n,
-            isPro: !!res.sg_isPro && !!res.sg_license_key,
-            licenseInvalid: !!res.sg_license_invalid,
-            org,
-            hideProHint: !!res.sg_hide_pro_hint,
-            entitled,
-          });
+          const respond = () => {
+            sendResponse({
+              settings: res.sg_settings || DEFAULTS.sg_settings,
+              leaksStopped: n,
+              isPro: !!res.sg_isPro && !!res.sg_license_key,
+              licenseInvalid: !!res.sg_license_invalid,
+              org,
+              hideProHint: !!res.sg_hide_pro_hint,
+              entitled: SGEntitlement.entitledFrom(res.sg_entitlement, org.orgId),
+            });
+          };
+          // Answering before the refresh landed reported the state the fetch
+          // was about to replace, so a lapsed cache showed Free until the
+          // popup was opened again. Await the refresh, then read the cache it
+          // wrote; on failure the old record stands and grace still applies.
+          if (SGEntitlement.needsRefresh(res.sg_entitlement, org.orgId) && org.teamMode && org.orgId && org.orgToken) {
+            checkEntitlement().finally(() => chrome.storage.local.get(['sg_entitlement'], (fresh) => {
+              res.sg_entitlement = fresh.sg_entitlement;
+              respond();
+            }));
+          } else {
+            respond();
+          }
         });
       });
     });
@@ -310,7 +363,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {  if (!msg)
   }
 
   if (msg.type === 'accountLogout') {
-    chrome.storage.local.remove(['sg_account_email'], () => sendResponse({ ok: true }));
+    chrome.storage.local.remove(['sg_account_email', 'sg_license_key', 'sg_isPro', 'sg_license_invalid', 'sg_entitlement'], () => sendResponse({ ok: true }));
     return true;
   }
 
@@ -630,7 +683,7 @@ function handleAlert(alert, sendResponse) {
           // Managed installs deliver to the worker only. The worker fans out to
           // the channels the IT admin configured server-side, so forward is true.
           promises.push(sendToWorker(alert, true));
-          if (o.alertEndpoint && /^https:\/\//i.test(o.alertEndpoint)) {
+          if (o.alertEndpoint && /^https:\/\//i.test(o.alertEndpoint) && isSafeOutboundUrlBg(o.alertEndpoint)) {
             promises.push(fetch(o.alertEndpoint, {
               method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(alert),
             }).then(r => { if (!r.ok) throw new Error('endpoint ' + r.status); }).catch(() => {}));
@@ -653,7 +706,7 @@ function handleAlert(alert, sendResponse) {
           if (channels.email && channels.email.enabled && channels.email.apiKey && channels.email.to) {
             promises.push(sendEmail(channels.email, alert));
           }
-          if (o.alertEndpoint && /^https:\/\//i.test(o.alertEndpoint)) {
+          if (o.alertEndpoint && /^https:\/\//i.test(o.alertEndpoint) && isSafeOutboundUrlBg(o.alertEndpoint)) {
             promises.push(fetch(o.alertEndpoint, {
               method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(alert),
             }).then(r => { if (!r.ok) throw new Error('endpoint ' + r.status); }).catch(() => {}));
@@ -861,7 +914,7 @@ async function doHeartbeat() {
       installId: await getInstallId(),
       timestamp: new Date().toISOString(),
     };
-    const url = (org.alertEndpoint && /^https:\/\//i.test(org.alertEndpoint)) ? org.alertEndpoint.replace(/\/$/, '') + '/heartbeat' : (WORKER_URL + '/api/heartbeat');
+    const url = (org.alertEndpoint && /^https:\/\//i.test(org.alertEndpoint) && isSafeOutboundUrlBg(org.alertEndpoint)) ? org.alertEndpoint.replace(/\/$/, '') + '/heartbeat' : (WORKER_URL + '/api/heartbeat');
     await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), cache: 'no-store' }).catch(() => {});
   } catch (e) {}
 }

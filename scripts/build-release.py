@@ -56,6 +56,7 @@ ORDER = [
     "configverify.js",
     "entitlement-state.js",
     "welcome.js",
+    "llms.txt",
 ]
 
 

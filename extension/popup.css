@@ -246,9 +246,20 @@ a { color: inherit; }
 }
 
 .fl { display: flex; justify-content: center; gap: 18px; font-size: 12px; color: #636366; }
-.fl a, .fl span { padding: 12px 0; }
-.fl a { text-decoration: none; }
+.fl a { padding: 12px 0; text-decoration: none; }
 .fl a:hover { text-decoration: underline; text-decoration-color: #4C6B10; text-underline-offset: 3px; }
+
+.ver {
+  display: block; width: 100%; padding: 0 0 12px;
+  border: 0; background: none; cursor: pointer;
+  font-family: inherit; font-size: 11px; color: #8E8E93;
+}
+.ver:hover { color: #636366; text-decoration: underline; text-decoration-color: #4C6B10; text-underline-offset: 3px; }
+.ver:disabled { cursor: default; opacity: .6; }
+.up-note { margin: -6px 0 12px; font-size: 11px; line-height: 1.5; color: #636366; text-align: center; }
+.up-note:empty { display: none; }
+.up-note.up-ok { color: #4C6B10; }
+.up-note.up-err { color: #B3261E; }
 
 .foot-note {
   margin: 0 0 10px; text-align: center;

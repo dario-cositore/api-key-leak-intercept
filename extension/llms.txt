@@ -1,0 +1,100 @@
+# API Key Leak Intercept
+
+> Stops API keys, secrets, and personal data from leaking into AI chats. Detection runs locally in your browser. No message content or secrets are ever transmitted.
+
+## What it does
+
+API Key Leak Intercept is a Chrome extension that sits between your clipboard and every AI chat. When you type or paste a message containing an API key, secret, or personal data into an AI chat (ChatGPT, Claude, Gemini, Copilot, Perplexity, and 40+ other tools), it shows a modal before the message is sent. You choose: Cancel, Send anyway, or Redact (Pro). All detection runs locally — your message content and secrets are never transmitted.
+
+## Key facts
+
+- **Product:** Chrome extension (Manifest V3)
+- **Price:** Free (API key detection, no cap) | Pro $7.99/mo or $59/yr (PII, custom regex, redaction, history) | Team (per-seat, force-install, alerts, dashboard)
+- **Detection:** 100% local (regex + high-entropy). No message content transmitted.
+- **Sites:** 40+ AI chat and work tools
+- **Source:** Open source (MIT) — https://github.com/dario-cositore/api-key-leak-intercept
+- **Privacy policy:** https://dariocositore.com/tools/api-key-leak-intercept/privacy/
+- **Store listing:** https://chromewebstore.google.com/detail/api-key-leak-intercept/ajnlfcdamhbkpdkkmooijamanhlfhpod
+- **Seller:** Dario Cositore, independent developer, Castelleone (CR), Italy
+- **Support:** support@dariocositore.com
+- **Payments:** Waffo Pancake checkout + PayPal. 14-day money-back guarantee.
+
+## What it detects
+
+### Free tier
+- API keys and tokens: AWS, OpenAI, Anthropic, Google, GitHub, Stripe, and 40+ providers
+- JWTs, Bearer tokens, PEM private keys
+- Generic key=value assignments
+- High-entropy tokens (catches what regex misses)
+
+### Pro tier ($7.99/mo or $59/yr)
+- All free tier detections
+- PII: emails, phone numbers, credit cards, IP addresses, national IDs for 30 countries
+- Custom regex patterns
+- One-click redaction (replace secrets with typed placeholders like [API_KEY_1])
+- Local warning history
+
+### Team tier (per-seat)
+- All Pro features
+- Force-install via Chrome Enterprise Policy
+- Alerts to Slack, Teams, Telegram, webhook, or email
+- Cloud dashboard (last 500 alerts per organization)
+- Heartbeat (which installs are alive)
+- Universal mode (scan every website, not just AI chats)
+- One-setup-code org configuration
+
+## How it works
+
+1. Type or paste a message into an AI chat (40+ sites covered)
+2. Press Enter or click Send
+3. If a secret is detected, a modal appears: Cancel, Send anyway, or Redact (Pro)
+4. Messages without secrets pass through untouched
+
+## Network requests
+
+- License verification against our backend (only when a Pro license key is stored)
+- A signed daily config fetch (site lists only, never detection rules)
+- Team mode only: daily entitlement check, opt-in heartbeat, alert metadata
+- No analytics, no trackers, no remote fonts
+
+## Permissions
+
+- storage: save settings, counter, and audit log locally
+- alarms: daily license revalidation, config fetch, team heartbeat
+- scripting: register content script for admin-added sites and Universal mode
+- Host access: AI chat and work tool sites (listed in manifest)
+- <all_urls> (optional): only requested when Universal mode is turned on
+
+## FAQ
+
+### Does it read my messages?
+It scans the text in the input field of AI chat sites. It does not read conversation history or stored messages. Detection runs 100% locally.
+
+### Is it safe?
+Yes. All detection runs locally. No message content or secrets are transmitted. Only license verification, a signed daily config fetch (site lists), and team-mode alerts (if configured by IT admin).
+
+### What sites does it work on?
+ChatGPT, Claude, Gemini, Copilot, Perplexity, Mistral, DeepSeek, Hugging Face, Poe, You.com, Phind, Character.ai, Grok, Notion, GitHub, Slack, Discord, Teams, and 20+ more. Full list: https://dariocositore.com/tools/api-key-leak-intercept/coverage/
+
+### Does it slow down my browser?
+No. Detection runs in under 50ms for typical messages.
+
+### How do I uninstall?
+Chrome → Extensions → API Key Leak Intercept → Remove. Settings and data are stored locally and removed on uninstall.
+
+### What's the refund policy?
+14-day money-back guarantee. Email support@dariocositore.com.
+
+### Is the source code available?
+Yes. MIT license: https://github.com/dario-cositore/api-key-leak-intercept
+
+## Links
+
+- Landing page: https://dariocositore.com/tools/api-key-leak-intercept/
+- Privacy policy: https://dariocositore.com/tools/api-key-leak-intercept/privacy/
+- Terms: https://dariocositore.com/terms/
+- Coverage (supported sites): https://dariocositore.com/tools/api-key-leak-intercept/coverage/
+- Changelog: https://dariocositore.com/tools/api-key-leak-intercept/changelog/
+- GitHub: https://github.com/dario-cositore/api-key-leak-intercept
+- Support: support@dariocositore.com
+- Upgrade: https://dariocositore.com/tools/api-key-leak-intercept/upgrade/

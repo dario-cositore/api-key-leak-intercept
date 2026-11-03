@@ -277,8 +277,6 @@
     const setupBlock = $('sgp-setup-block');
     if (setupBlock) setupBlock.style.display = (!isManaged && org.teamMode && org.orgId) ? 'block' : 'none';
 
-    const ver = $('sgp-version');
-    if (ver) ver.textContent = 'v' + chrome.runtime.getManifest().version;
     applyLock();
   }
 
@@ -603,6 +601,53 @@
     chrome.tabs.create({ url: 'https://dariocositore.com/tools/api-key-leak-intercept/upgrade/' });
   });
 
+  /* ------------- update check ------------- */
+  // Chrome swaps in new store versions on its own. This row only asks it to
+  // look now and reports what it found; the callback and the promise forms of
+  // requestUpdateCheck answer with either a result object or a bare status.
+  (function wireUpdateCheck() {
+    const buttons = Array.from(document.querySelectorAll('[data-update-check]'));
+    const notes = Array.from(document.querySelectorAll('[data-update-status]'));
+    const ver = chrome.runtime.getManifest().version;
+    const setNote = (text, cls) => {
+      for (const n of notes) {
+        n.textContent = text || '';
+        n.className = 'up-note' + (cls ? ' ' + cls : '');
+      }
+    };
+    const finish = (a, b) => {
+      const status = (a && typeof a === 'object') ? a.status : a;
+      const found = (a && typeof a === 'object') ? a.version : (b && b.version);
+      for (const btn of buttons) { btn.disabled = false; btn.textContent = 'v' + ver + ' \u00B7 Check for updates'; }
+      if (status === 'update_available') {
+        setNote('Version ' + (found || '') + ' is installing. Reload open chat tabs to switch to it.', 'up-ok');
+      } else if (status === 'no_update') {
+        setNote("You're on the latest version.", 'up-ok');
+      } else if (status === 'throttled') {
+        setNote('Checked recently. Chrome also checks on its own every few hours.');
+      } else {
+        setNote("Couldn't check right now. Try again in a moment.", 'up-err');
+      }
+    };
+    for (const btn of buttons) {
+      btn.textContent = 'v' + ver + ' \u00B7 Check for updates';
+      btn.addEventListener('click', () => {
+        if (typeof chrome.runtime.requestUpdateCheck !== 'function') {
+          setNote("This browser doesn't support on-demand update checks.", 'up-err');
+          return;
+        }
+        for (const b of buttons) b.disabled = true;
+        setNote('Checking\u2026');
+        let settled = false;
+        const once = (a, b) => { if (!settled) { settled = true; finish(a, b); } };
+        try {
+          const p = chrome.runtime.requestUpdateCheck(once);
+          if (p && typeof p.then === 'function') p.then(once, once);
+        } catch (e) { once({ status: 'error' }); }
+      });
+    }
+  })();
+
   /* ------------- signed-in artboard wiring ------------- */
   // The two artboards carry separate controls, so the second one needs its own
   // handlers and its own readouts. Everything below routes back through the
@@ -637,7 +682,7 @@
     });
 
     on('sgp-signout', () => {
-      chrome.storage.local.remove(['sg_license_key', 'sg_isPro', 'sg_account_email', 'sg_license_invalid'], () => {
+      chrome.storage.local.remove(['sg_license_key', 'sg_isPro', 'sg_account_email', 'sg_license_invalid', 'sg_entitlement'], () => {
         isPro = false;
         licenseInvalid = false;
         accountEmail = '';
