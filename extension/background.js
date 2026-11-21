@@ -31,6 +31,49 @@ function isSafeOutboundUrlBg(raw) {
   return true;
 }
 
+// Metadata only: never orgToken, license keys, or channel credentials.
+function safeOutboundAlert(alert) {
+  const a = alert || {};
+  const out = {
+    orgId: a.orgId || '',
+    userEmail: a.userEmail || 'unknown',
+    site: a.site || '',
+    url: a.url || '',
+    secretTypes: Array.isArray(a.secretTypes) ? a.secretTypes.slice() : [],
+    severity: a.severity || 'medium',
+    action: a.action || '',
+    timestamp: a.timestamp || '',
+    extensionVersion: a.extensionVersion || '',
+  };
+  if (a.via) out.via = a.via;
+  if (a.justification) out.justification = String(a.justification).slice(0, 140);
+  return out;
+}
+
+function originPatternFor(raw) {
+  try {
+    const u = new URL(String(raw));
+    if (u.protocol !== 'https:') return null;
+    return u.origin + '/*';
+  } catch (e) { return null; }
+}
+
+function ensureOutboundPermission(url) {
+  return new Promise((resolve) => {
+    if (!isSafeOutboundUrlBg(url)) { resolve(false); return; }
+    const origin = originPatternFor(url);
+    if (!origin) { resolve(false); return; }
+    if (!chrome.permissions || !chrome.permissions.contains) { resolve(true); return; }
+    try {
+      chrome.permissions.contains({ origins: [origin] }, (has) => {
+        if (has) { resolve(true); return; }
+        if (!chrome.permissions.request) { resolve(false); return; }
+        chrome.permissions.request({ origins: [origin] }, (granted) => resolve(!!granted));
+      });
+    } catch (e) { resolve(false); }
+  });
+}
+
 /**
  * API Key Leak Intercept: service worker
  *
@@ -40,6 +83,25 @@ function isSafeOutboundUrlBg(raw) {
  */
 const WORKER_URL = 'https://api.dariocositore.com';
 const RESEND_FROM = 'API Key Leak Intercept <alerts@api-key-leak-intercept.dev>';
+
+// Every request this worker makes goes through here so it gets a deadline.
+// MV3 keeps the worker alive only while something is waiting on it, so a fetch
+// that never settled meant sendResponse was never called: getSettings answered
+// nothing, the popup's callback ran with undefined and it rendered its markup
+// defaults, which for a Pro install is the Free artboard with no error
+// anywhere. Eight seconds is generous for all of these, and every caller
+// already has a catch that treats a failure as "keep what we have".
+function swFetch(url, init) {
+  const opts = Object.assign({}, init || {});
+  if (!opts.signal) {
+    try {
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        opts.signal = AbortSignal.timeout(8000);
+      }
+    } catch (e) {}
+  }
+  return fetch(url, opts);
+}
 
 const DEFAULTS = {
   sg_settings: {
@@ -130,10 +192,13 @@ async function checkEntitlement() {
   try {
     const org = await new Promise((resolve) => getEffectiveOrg(resolve));
     if (!org.teamMode || !org.orgId || !org.orgToken) return;
-    const r = await fetch(WORKER_URL + '/api/entitlement', {
+    // installId is what ties the seat to this machine: the worker grants team
+    // Pro per install, so an org past its cap loses it on the machines it did
+    // not pay for rather than on all of them at once.
+    const r = await swFetch(WORKER_URL + '/api/entitlement', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orgId: org.orgId, orgToken: org.orgToken }),
+      body: JSON.stringify({ orgId: org.orgId, orgToken: org.orgToken, installId: await getInstallId() }),
       cache: 'no-store',
     });
     // A rotated ingest token answers 401 and a deleted org answers 404. Both
@@ -295,8 +360,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {  if (!msg)
           // was about to replace, so a lapsed cache showed Free until the
           // popup was opened again. Await the refresh, then read the cache it
           // wrote; on failure the old record stands and grace still applies.
+          // Bounded at three seconds: hold the popup for a quick refresh, but
+          // never let one stall keep it from rendering at all. A stale answer
+          // inside grace is correct, a blank popup is not, and the refresh
+          // still lands in storage whenever it finishes.
           if (SGEntitlement.needsRefresh(res.sg_entitlement, org.orgId) && org.teamMode && org.orgId && org.orgToken) {
-            checkEntitlement().finally(() => chrome.storage.local.get(['sg_entitlement'], (fresh) => {
+            Promise.race([
+              checkEntitlement(),
+              new Promise((r) => setTimeout(r, 3000)),
+            ]).finally(() => chrome.storage.local.get(['sg_entitlement'], (fresh) => {
               res.sg_entitlement = fresh.sg_entitlement;
               respond();
             }));
@@ -317,10 +389,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {  if (!msg)
   if (msg.type === 'saveSettings') {
     isSettingsLocked((locked) => {
       if (locked) { sendResponse({ ok: false, locked: true }); return; }
-      chrome.storage.local.set({ sg_settings: msg.settings }, () => {
-        broadcastSettingsUpdated();
-        sendResponse({ ok: true });
-      });
+      const commit = () => {
+        chrome.storage.local.set({ sg_settings: msg.settings }, () => {
+          broadcastSettingsUpdated();
+          sendResponse({ ok: true });
+        });
+      };
+      // A force install's user does not get the pause switch, with or without
+      // lockSettings in policy: a managed install may only ever store
+      // enabled === true. Detection is re-forced on for managed installs
+      // regardless, so the scan never actually stopped before this -- but the
+      // record would sit there reading "off" on a machine nobody re-configures,
+      // and "make me invisible" is the one setting an employee must not own.
+      if (!msg.settings || msg.settings.enabled !== true) {
+        machineLocked((locked) => {
+          if (locked) { sendResponse({ ok: false, locked: true }); return; }
+          commit();
+        });
+        return;
+      }
+      commit();
     });
     return true;
   }
@@ -328,9 +416,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {  if (!msg)
   if (msg.type === 'saveOrg') {
     isSettingsLocked((locked) => {
       if (locked) { sendResponse({ ok: false, locked: true }); return; }
-      chrome.storage.local.set({ sg_org: msg.org }, () => {
-        broadcastSettingsUpdated();
-        checkEntitlement().finally(() => sendResponse({ ok: true }));
+      const next = msg.org || {};
+      chrome.storage.local.get(['sg_org'], (cur) => {
+        const had = String((cur && cur.sg_org && cur.sg_org.orgId) || '');
+        if (had && !String(next.orgId || '')) {
+          // Nothing in the popup can turn enrollment off any more -- the
+          // controls that used to are gone -- so a write that drops orgId is a
+          // bug or a stale screen, never a user decision. Losing it stops the
+          // heartbeat, the alert relay and the entitlement refresh while the
+          // licence itself keeps working, which is exactly how an organization
+          // vanishes without anything ever throwing.
+          sendResponse({ ok: false, locked: true, reason: 'org' });
+          return;
+        }
+        // An org ID without team mode is the same record half broken: every
+        // consumer gates on both, so it would look enrolled and do nothing.
+        if (String(next.orgId || '')) next.teamMode = true;
+        chrome.storage.local.set({ sg_org: next }, () => {
+          broadcastSettingsUpdated();
+          checkEntitlement().finally(() => sendResponse({ ok: true }));
+        });
       });
     });
     return true;
@@ -363,7 +468,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {  if (!msg)
   }
 
   if (msg.type === 'accountLogout') {
-    chrome.storage.local.remove(['sg_account_email', 'sg_license_key', 'sg_isPro', 'sg_license_invalid', 'sg_entitlement'], () => sendResponse({ ok: true }));
+    // The seat belongs to whoever owns the machine. Signing out would drop the
+    // licence and Pro from a machine the organization is still paying for, and
+    // nobody on it holds the key to put them back.
+    machineLocked((locked) => {
+      if (locked) { sendResponse({ ok: false, locked: true }); return; }
+      chrome.storage.local.remove(['sg_account_email', 'sg_license_key', 'sg_isPro', 'sg_license_invalid', 'sg_entitlement'], () => sendResponse({ ok: true }));
+    });
     return true;
   }
 
@@ -458,6 +569,21 @@ function withManagedState(cb) {
 
 // Enterprise policy overrides the user's org preferences wherever the two
 // meet; that merge lives in getEffectiveOrg above.
+
+// Whether the machine belongs to somebody other than the person at it. Two
+// routes, one answer: forced on by an administrator, or enrolled with an
+// organization's setup code. Only the first was consulted until now, so a
+// key-paired install kept a live pause switch while the dashboard went on
+// reporting it as healthy.
+function machineLocked(cb) {
+  withManagedState((managed) => {
+    if (managed) { cb(true); return; }
+    chrome.storage.local.get(['sg_org'], (res) => {
+      const org = (res && res.sg_org) || {};
+      cb(!!(org.teamMode && org.orgId));
+    });
+  });
+}
 
 /* ------------------------------------------------------------------ */
 /* Runtime content script registration                                 */
@@ -569,7 +695,7 @@ function accountLogin(email, password, sendResponse) {
     sendResponse({ ok: false, valid: false, error: 'enter your email and password' });
     return;
   }
-  fetch(WORKER_URL + '/api/account/login', {
+  swFetch(WORKER_URL + '/api/account/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: e, password: p }),
@@ -601,12 +727,15 @@ function accountLogin(email, password, sendResponse) {
 function verifyLicense(key, sendResponse) {
   const k = String(key || '').trim().toUpperCase();
   if (!k) { sendResponse({ ok: false, valid: false, error: 'missing key' }); return; }
-  fetch(WORKER_URL + '/api/license/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: k }),
-    cache: 'no-store',
-  })
+  // installId is what the worker counts devices by. Without it one key still
+  // works on any number of PCs, which is the reselling hole.
+  getInstallId()
+    .then((installId) => swFetch(WORKER_URL + '/api/license/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: k, installId }),
+      cache: 'no-store',
+    }))
     .then(r => r.json().then(data => ({ data })))
     .then(({ data }) => {
       // Revoke only on a definitive { valid: false } from the server.
@@ -684,8 +813,8 @@ function handleAlert(alert, sendResponse) {
           // the channels the IT admin configured server-side, so forward is true.
           promises.push(sendToWorker(alert, true));
           if (o.alertEndpoint && /^https:\/\//i.test(o.alertEndpoint) && isSafeOutboundUrlBg(o.alertEndpoint)) {
-            promises.push(fetch(o.alertEndpoint, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(alert),
+            promises.push(swFetch(o.alertEndpoint, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(safeOutboundAlert(alert)),
             }).then(r => { if (!r.ok) throw new Error('endpoint ' + r.status); }).catch(() => {}));
           }
         } else {
@@ -707,8 +836,8 @@ function handleAlert(alert, sendResponse) {
             promises.push(sendEmail(channels.email, alert));
           }
           if (o.alertEndpoint && /^https:\/\//i.test(o.alertEndpoint) && isSafeOutboundUrlBg(o.alertEndpoint)) {
-            promises.push(fetch(o.alertEndpoint, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(alert),
+            promises.push(swFetch(o.alertEndpoint, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(safeOutboundAlert(alert)),
             }).then(r => { if (!r.ok) throw new Error('endpoint ' + r.status); }).catch(() => {}));
           }
           // Cloud relay: stores the alert for the IT dashboard. forward:false,
@@ -734,7 +863,7 @@ function storeAlertLocally(alert) {
   auditWriteQueue = auditWriteQueue.then(() => new Promise((resolve) => {
     chrome.storage.local.get(['sg_audit_log'], (r) => {
       const log = r.sg_audit_log || [];
-      log.unshift(alert);
+      log.unshift(safeOutboundAlert(alert));
       if (log.length > 100) log.length = 100;
       chrome.storage.local.set({ sg_audit_log: log }, () => resolve());
     });
@@ -765,26 +894,36 @@ function pruneAuditLog(clearedAt) {
 
 // Solo Pro: the same catch log lives in the customer console feed, so pushes
 // past the warning show up where a team manager would look for them too.
+// Returns a promise that settles only once the relay has actually answered.
+// The caller does Promise.resolve(sendPersonalAlert(...)) before sendResponse
+// on purpose -- it wants the worker held until the push is done, because
+// answering first let the worker be terminated in the gap and lost the relay
+// while the local log already carried the catch. This returned undefined, so
+// that await resolved on the next microtask and the response still went out
+// ahead of the storage read, let alone the network.
 function sendPersonalAlert(alert) {
-  try {
-    chrome.storage.local.get(['sg_license_key'], (r) => {
-      const licenseKey = String(r.sg_license_key || '').trim();
-      if (!licenseKey) { recordSync(false, 'personal', 'no license key stored'); return; }
-      fetch(WORKER_URL + '/api/license/alert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ licenseKey, alert }),
-        cache: 'no-store',
-      }).then((res) => {
-        if (res.ok) {
-          recordSync(true, 'personal', '');
-          res.json().then((data) => pruneAuditLog(data && data.logClearedAt)).catch(() => {});
-        } else {
-          recordSync(false, 'personal', 'HTTP ' + res.status);
-        }
-      }).catch((e) => recordSync(false, 'personal', e && e.message ? e.message : 'network error'));
-    });
-  } catch (e) {}
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(['sg_license_key'], (r) => {
+        const licenseKey = String(r.sg_license_key || '').trim();
+        if (!licenseKey) { recordSync(false, 'personal', 'no license key stored'); resolve(); return; }
+        getInstallId().then((installId) => swFetch(WORKER_URL + '/api/license/alert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ licenseKey, alert: safeOutboundAlert(alert), installId }),
+          cache: 'no-store',
+        }).then((res) => {
+          if (res.ok) {
+            recordSync(true, 'personal', '');
+            res.json().then((data) => pruneAuditLog(data && data.logClearedAt)).catch(() => {});
+          } else {
+            recordSync(false, 'personal', 'HTTP ' + res.status);
+          }
+        }).catch((e) => recordSync(false, 'personal', e && e.message ? e.message : 'network error'))
+          .then(resolve, resolve));
+      });
+    } catch (e) { resolve(); }
+  });
 }
 
 function formatAlertMessage(alert) {
@@ -809,41 +948,62 @@ function formatAlertMessage(alert) {
 }
 
 function sendSlack(webhookUrl, alert) {
-  return fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: formatAlertMessage(alert) }),
-  }).then(r => { if (!r.ok) throw new Error('Slack ' + r.status); });
+  if (!isSafeOutboundUrlBg(webhookUrl)) return Promise.reject(new Error('Slack url blocked'));
+  const payload = { text: formatAlertMessage(safeOutboundAlert(alert)) };
+  return ensureOutboundPermission(webhookUrl).then((ok) => {
+    if (!ok) throw new Error('Slack permission denied');
+    return swFetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => { if (!r.ok) throw new Error('Slack ' + r.status); });
+  });
 }
 
 function sendTeams(webhookUrl, alert) {
-  return fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: formatAlertMessage(alert) }),
-  }).then(r => { if (!r.ok) throw new Error('Teams ' + r.status); });
+  if (!isSafeOutboundUrlBg(webhookUrl)) return Promise.reject(new Error('Teams url blocked'));
+  const payload = { text: formatAlertMessage(safeOutboundAlert(alert)) };
+  return ensureOutboundPermission(webhookUrl).then((ok) => {
+    if (!ok) throw new Error('Teams permission denied');
+    return swFetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => { if (!r.ok) throw new Error('Teams ' + r.status); });
+  });
 }
 
 function sendTelegram(botToken, chatId, alert) {
-  return fetch('https://api.telegram.org/bot' + botToken + '/sendMessage', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: formatAlertMessage(alert) }),
-  }).then(r => { if (!r.ok) throw new Error('Telegram ' + r.status); });
+  const url = 'https://api.telegram.org/bot' + botToken + '/sendMessage';
+  if (!isSafeOutboundUrlBg('https://api.telegram.org/')) return Promise.reject(new Error('Telegram url blocked'));
+  const payload = { chat_id: chatId, text: formatAlertMessage(safeOutboundAlert(alert)) };
+  return ensureOutboundPermission('https://api.telegram.org/').then((ok) => {
+    if (!ok) throw new Error('Telegram permission denied');
+    return swFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => { if (!r.ok) throw new Error('Telegram ' + r.status); });
+  });
 }
 
 function sendWebhook(url, alert) {
-  return fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(alert),
-  }).then(r => { if (!r.ok) throw new Error('Webhook ' + r.status); });
+  if (!isSafeOutboundUrlBg(url)) return Promise.reject(new Error('Webhook url blocked'));
+  const payload = safeOutboundAlert(alert);
+  return ensureOutboundPermission(url).then((ok) => {
+    if (!ok) throw new Error('Webhook permission denied');
+    return swFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => { if (!r.ok) throw new Error('Webhook ' + r.status); });
+  });
 }
 
 function sendEmail(channel, alert) {
   const to = String(channel.to || '').split(',').map(e => e.trim()).filter(Boolean);
   if (to.length === 0) return Promise.reject(new Error('Email no recipients'));
-  return fetch('https://api.resend.com/emails', {
+  return swFetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       'Authorization': 'Bearer ' + channel.apiKey,
@@ -859,10 +1019,16 @@ function sendEmail(channel, alert) {
 }
 
 function sendToWorker(alert, forward) {
-  return getInstallId().then((installId) => fetch(WORKER_URL + '/api/alerts', {
+  return Promise.all([
+    getInstallId(),
+    new Promise((resolve) => getEffectiveOrg(resolve)),
+  ]).then(([installId, org]) => swFetch(WORKER_URL + '/api/alerts', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ alert, forward: !!forward, installId }),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Org-Token': (org && org.orgToken) || '',
+    },
+    body: JSON.stringify({ alert: safeOutboundAlert(alert), forward: !!forward, installId }),
     cache: 'no-store',
   })).then(r => {
     recordSync(r.ok, 'org', r.ok ? '' : 'HTTP ' + r.status);
@@ -915,7 +1081,7 @@ async function doHeartbeat() {
       timestamp: new Date().toISOString(),
     };
     const url = (org.alertEndpoint && /^https:\/\//i.test(org.alertEndpoint) && isSafeOutboundUrlBg(org.alertEndpoint)) ? org.alertEndpoint.replace(/\/$/, '') + '/heartbeat' : (WORKER_URL + '/api/heartbeat');
-    await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), cache: 'no-store' }).catch(() => {});
+    await swFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), cache: 'no-store' }).catch(() => {});
   } catch (e) {}
 }
 
@@ -927,7 +1093,7 @@ importScripts('configverify.js', 'entitlement-state.js');
 
 async function fetchConfig() {
   try {
-    const res = await fetch(CONFIG_URL, { cache: 'no-store' });
+    const res = await swFetch(CONFIG_URL, { cache: 'no-store' });
     if (!res.ok) throw new Error('fetch ' + res.status);
     const raw = await res.text();
     if (raw.length > 64 * 1024) throw new Error('too large');

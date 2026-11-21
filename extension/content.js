@@ -122,6 +122,16 @@
   let escHandler = null;
   let tabHandler = null;
   let lastEnt = null;
+  // Teardown for the two document-level listeners the drawer registers. The
+  // drawer is rebuilt from scratch every time protection comes back on, so
+  // without this each pause/resume stacked another mousemove and Escape
+  // handler on the document, each still holding the drawer it was made for.
+  let notchCleanup = null;
+  function releaseNotch() {
+    if (!notchCleanup) return;
+    notchCleanup();
+    notchCleanup = null;
+  }
 
   function recomputeEntitled() {
     settings.entitled = !!(Entitlement && Entitlement.entitledFrom(lastEnt, settings.orgId));
@@ -177,6 +187,10 @@
           settings.alertOnBlock = res.sg_org.alertOnBlock !== false;
           settings.universalMode = !!res.sg_org.universalMode;
         }
+        // An organization's machine stays on. The popup can no longer pause a
+        // key-paired install, and this makes the page agree even when a record
+        // written before that fix still says otherwise.
+        if (settings.teamMode && settings.orgId) settings.enabled = true;
         // server-confirmed paid entitlement (TTL + grace, fails closed)
         lastEnt = res.sg_entitlement || null;
         recomputeEntitled();
@@ -285,7 +299,10 @@
   function editableRoot(el) {
     if (!el) return null;
     if (el.closest) {
-      const ce = el.closest('[contenteditable="true"]');
+      // same coverage as COMPOSER_SEL: plaintext-only and contenteditable=""
+      // are editors too, and the old true-only check fell through to the
+      // walk-up on both of them
+      const ce = el.closest('[contenteditable]:not([contenteditable="false"])');
       if (ce) return ce;
     }
     return isEditable(el) ? el : findInputEl(el);
@@ -365,13 +382,27 @@
     return trusted;
   }
 
+  // What a chat composer looks like, in preference order. A textarea or a
+  // contenteditable is the real thing, so it is always tried first and a plain
+  // text input only fills in behind it. Both passes matter: a form built on
+  // <input type="text"> plus a submit button used to resolve to nothing, so the
+  // click handler and the submit backstop both bailed out before a scan and
+  // that send went through with no warning.
+  const COMPOSER_SEL = 'textarea, [contenteditable]:not([contenteditable="false"])';
+  const TEXT_INPUT_SEL = 'input[type="text"], input[type="search"], input[type="email"], input[type="tel"], input:not([type])';
+
+  function editableIn(root) {
+    if (!root || !root.querySelector) return null;
+    return root.querySelector(COMPOSER_SEL) || root.querySelector(TEXT_INPUT_SEL);
+  }
+
   function findInputEl(startEl) {
     // Walk up to find the chat input
     let el = startEl;
     for (let i = 0; i < 6 && el; i++) {
       if (isEditable(el)) return el;
-      const ta = el.querySelector && el.querySelector('textarea, [contenteditable]:not([contenteditable="false"])');
-      if (ta) return ta;
+      const found = editableIn(el);
+      if (found) return found;
       el = el.parentElement;
     }
     // fallback: an editable that is actually on screen, closest to the bottom
@@ -380,7 +411,10 @@
     // sorting by rect.top descending picked an editor scrolled far below the
     // window over the one being typed in, so the scan read text the send would
     // not have sent and the real secret passed untouched.
-    const all = Array.from(document.querySelectorAll('textarea, [contenteditable]:not([contenteditable="false"])'));
+    let all = Array.from(document.querySelectorAll(COMPOSER_SEL));
+    // Only when the page has no composer at all. Mixing the two pools would
+    // let an unrelated form field outrank a composer that is already there.
+    if (all.length === 0) all = Array.from(document.querySelectorAll(TEXT_INPUT_SEL));
     if (all.length === 0) return null;
     const vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
     const visible = vh
@@ -658,7 +692,6 @@
 
     const alert = {
       orgId: settings.orgId || '',
-      orgToken: settings.orgToken || '',
       userEmail: settings.userEmail || 'unknown',
       extraEmails: settings.extraEmails || '',
       site: location.hostname,
@@ -735,10 +768,16 @@
   function updateWidget(state) {
     let root = document.getElementById(DRAWER_ID);
     if (!shouldScan()) {
-      if (root) root.remove();
+      if (root) {
+        releaseNotch();
+        root.remove();
+      }
       return;
     }
     if (!root) {
+      // a drawer the page tore down out from under us leaves its listeners
+      // registered, so drop them before making a new set
+      releaseNotch();
       root = document.createElement('div');
       root.id = DRAWER_ID;
       root.innerHTML = `
@@ -806,6 +845,8 @@
       };
       setNotch(HIDDEN_AT_REST);
       const onNotchMove = (e) => {
+        // the drawer can be detached by the page rather than by updateWidget
+        if (!document.body.contains(root)) return;
         if (notchPinned || notchHover) return;
         if (notchIdle) clearTimeout(notchIdle);
         notchIdle = setTimeout(() => setNotch(HIDDEN_AT_REST), IDLE_MS);
@@ -839,7 +880,7 @@
       });
       // a catch is worth seeing even when the mouse is nowhere near the edge
       if (state === 'warn' || state === 'danger') { notchHover = true; setNotch(0); }
-      document.addEventListener('keydown', (e) => {
+      const onNotchKey = (e) => {
         if (e.key !== 'Escape') return;
         if (!document.body.contains(root)) return;
         if (root.classList.contains('is-open')) {
@@ -848,7 +889,17 @@
           try { tab.blur(); } catch (e) {}
           try { root.style.setProperty('--hidden-percent', '100%'); } catch (e) {}
         }
-      });
+      };
+      document.addEventListener('keydown', onNotchKey);
+      // both of the above hang off document, not off the drawer, so the drawer
+      // being removed does not take them with it. Hand teardown to
+      // releaseNotch(), which updateWidget() calls on every removal.
+      notchCleanup = () => {
+        document.removeEventListener('mousemove', onNotchMove);
+        document.removeEventListener('keydown', onNotchKey);
+        if (notchIdle) { clearTimeout(notchIdle); notchIdle = null; }
+        if (notchRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(notchRaf); notchRaf = null; }
+      };
       renderWidget();
     }
     root.classList.remove('sg-warn', 'sg-danger');
@@ -1025,8 +1076,10 @@
     if (!shouldScan()) return;
     const form = e.target;
     if (form && form.closest && form.closest('#sg-overlay, #sg-drawer')) return;
-    const inputEl = findInputEl(form) ||
-      (form.querySelector && form.querySelector('textarea, [contenteditable="true"]'));
+    // findInputEl walks the form itself first, so the separate narrow
+    // selector this used to fall back to is gone: it only ever re-ran a query
+    // the walk had already done with a broader pattern.
+    const inputEl = findInputEl(form);
     if (!inputEl) return;
     const text = getText(inputEl);
     if (!text.trim()) return;

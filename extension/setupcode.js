@@ -108,8 +108,11 @@
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       return { ok: false, error: 'Setup code is damaged. Ask your IT admin for a new one.' };
     }
-    // The alert endpoint is enterprise policy only. A pasted code can never
-    // point alerts, the org token, or the user's email at another server.
+    // The alert endpoint is the one field refused on purpose. Joining an org
+    // is what a setup code is for, so orgToken and userEmail below are
+    // accepted, but alertEndpoint would re-point every catch this install
+    // ever records at a server the extension never chose. pickValid would drop
+    // it silently anyway; refusing it by name gives the admin a real answer.
     if (data.alertEndpoint !== undefined) {
       return { ok: false, error: 'This setup code is not allowed to set an alert endpoint.' };
     }

@@ -3,6 +3,6 @@
     "message": "API Key Leak Intercept"
   },
   "extDescription": {
-    "message": "Stop pasting API keys into AI chats. Warns you before a secret or personal data leaves your browser. All detection runs locally."
+    "message": "Stops API keys, passwords and card numbers from reaching AI chat logs. The send waits for your approval. Detection runs locally."
   }
 }

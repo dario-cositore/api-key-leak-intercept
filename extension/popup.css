@@ -203,6 +203,7 @@ a { color: inherit; }
 .catch-type { background: #C6F24E; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
 .catch-site { color: #636366; }
 .catch-action { margin-left: auto; font-weight: 600; }
+.catch-empty { color: #3A3A3C; font-size: 13px; line-height: 1.45; }
 .catch-body {
   margin-top: 10px;
   font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
@@ -252,9 +253,10 @@ a { color: inherit; }
 .ver {
   display: block; width: 100%; padding: 0 0 12px;
   border: 0; background: none; cursor: pointer;
-  font-family: inherit; font-size: 11px; color: #8E8E93;
+  font-family: inherit; font-size: 11px; color: #3A3A3C;
 }
-.ver:hover { color: #636366; text-decoration: underline; text-decoration-color: #4C6B10; text-underline-offset: 3px; }
+.ver:focus-visible { outline: 2px solid #1D1D1F; outline-offset: 2px; }
+.ver:hover { color: #1D1D1F; text-decoration: underline; text-decoration-color: #4C6B10; text-underline-offset: 3px; }
 .ver:disabled { cursor: default; opacity: .6; }
 .up-note { margin: -6px 0 12px; font-size: 11px; line-height: 1.5; color: #636366; text-align: center; }
 .up-note:empty { display: none; }

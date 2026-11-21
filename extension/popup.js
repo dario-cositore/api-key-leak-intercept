@@ -4,18 +4,31 @@
   // The approved popup design moved team configuration to the web console, so
   // those controls are no longer in the markup. Anything absent resolves to a
   // harmless stub: the remaining wiring runs instead of throwing on first use.
-  const STUB = {
-    addEventListener() {}, removeEventListener() {}, click() {}, focus() {}, blur() {},
-    setAttribute() {}, getAttribute() { return null; }, removeAttribute() {},
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    querySelector() { return STUB; }, querySelectorAll() { return []; },
-    appendChild() {}, remove() {}, contains() { return false; },
-    getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
-    style: {}, dataset: {}, options: [],
-    value: '', checked: false, disabled: false, hidden: false,
-    textContent: '', innerHTML: '', placeholder: '',
+  // One inert stub per missing id, memoised. Sharing a single object meant
+  // every absent control wrote into the same value/checked slot, so a write to
+  // one read back as another: collectOrg() picked an org ID up as the user's
+  // email address, and a Universal-mode toggle saved a cleared org record over
+  // the real one. Anything whose control left the markup is looked up here.
+  const stubs = new Map();
+  function makeStub() {
+    return {
+      addEventListener() {}, removeEventListener() {}, click() {}, focus() {}, blur() {},
+      setAttribute() {}, getAttribute() { return null; }, removeAttribute() {},
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+      querySelector() { return makeStub(); }, querySelectorAll() { return []; },
+      appendChild() {}, remove() {}, contains() { return false; },
+      getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
+      style: {}, dataset: {}, options: [],
+      value: '', checked: false, disabled: false, hidden: false,
+      textContent: '', innerHTML: '', placeholder: '',
+    };
+  }
+  const $ = (id) => {
+    const el = document.getElementById(id);
+    if (el) return el;
+    if (!stubs.has(id)) stubs.set(id, makeStub());
+    return stubs.get(id);
   };
-  const $ = (id) => document.getElementById(id) || STUB;
   const UPGRADE_URL = 'https://dariocositore.com/tools/api-key-leak-intercept/upgrade/';
   const CONSOLE_FEED_URL = 'https://dariocositore.com/tools/api-key-leak-intercept/manage/#feed';
 
@@ -69,6 +82,11 @@
       entitled = !!res.entitled;
       licenseInvalid = !!res.licenseInvalid;
       org = res.org || org;
+      // An organization owns this machine whether it arrived by enterprise
+      // policy or by a pasted setup code, so it locks either way. Policy still
+      // has the last word: a later lockSettings read raises this to 'full', and
+      // nothing here can lower it again.
+      if (org.teamMode && org.orgId && !lockState) lockState = 'managed';
       try {
         const stored = window.localStorage.getItem('aki_account_email');
         if (stored) accountEmail = stored;
@@ -117,7 +135,8 @@
       sub: c.sub,
       type: (a.secretTypes || []).join(', ') || 'Secret',
       site: a.site || '',
-      note: c.note + ' · ' + relTime(a.timestamp),
+      actionLabel: c.note,
+      note: relTime(a.timestamp),
     };
   }
 
@@ -170,6 +189,29 @@
     panelOpen('sgp-team', true);
   }
 
+  function requestChannelPermissions(o) {
+    if (!chrome.permissions || !chrome.permissions.request) return;
+    const ch = (o && o.channels) || {};
+    const urls = [];
+    if (ch.slack && ch.slack.enabled && ch.slack.webhookUrl) urls.push(ch.slack.webhookUrl);
+    if (ch.teams && ch.teams.enabled && ch.teams.webhookUrl) urls.push(ch.teams.webhookUrl);
+    if (ch.telegram && ch.telegram.enabled) urls.push('https://api.telegram.org/');
+    if (ch.webhook && ch.webhook.enabled && ch.webhook.url) urls.push(ch.webhook.url);
+    const origins = [];
+    for (const raw of urls) {
+      try {
+        const u = new URL(raw);
+        if (u.protocol === 'https:') origins.push(u.origin + '/*');
+      } catch (e) {}
+    }
+    if (!origins.length) return;
+    try {
+      chrome.permissions.contains({ origins }, (has) => {
+        if (!has) chrome.permissions.request({ origins }, () => {});
+      });
+    } catch (e) {}
+  }
+
   function render() {
     applyShell();
     const locked = !!lockState || $('sgp-enabled').disabled;
@@ -202,16 +244,23 @@
       accountLine.appendChild(sub);
     }
     const evIn = document.getElementById('sgp-event-in');
+    const evEmpty = document.getElementById('sgp-event-empty');
     if (evIn) {
       if (caught && enabled) {
         setTxt('sgp-event-type-in', caught.type);
         setTxt('sgp-event-site-in', caught.site);
+        setTxt('sgp-event-action-in', caught.actionLabel || '');
         setTxt('sgp-event-note-in', caught.note);
         evIn.style.display = 'block';
+        if (evEmpty) evEmpty.style.display = 'none';
       } else {
         evIn.style.display = 'none';
+        if (evEmpty) evEmpty.style.display = 'block';
       }
     }
+    const teamBtn = $('sgp-team-console');
+    if (teamBtn) teamBtn.style.display = (org.teamMode && org.orgId) ? '' : 'none';
+    requestChannelPermissions(org);
     $('sgp-cat-api').checked = $('sgp-cat-api').disabled || !!settings.categories.apiKeys;
     $('sgp-cat-pii').checked = !!settings.categories.pii;
     $('sgp-cat-net').checked = !!settings.categories.network;
@@ -274,8 +323,15 @@
       $('sgp-upgrade-label').textContent = 'Unlock Pro';
     }
 
-    const setupBlock = $('sgp-setup-block');
-    if (setupBlock) setupBlock.style.display = (!isManaged && org.teamMode && org.orgId) ? 'block' : 'none';
+    // Joining does not require an org beforehand. Requiring one made the field
+    // appear only once you were already enrolled, so a fresh machine had
+    // nowhere to paste a code and the documented one-paste setup could not
+    // start. A managed install is the one that must not see it: IT configures
+    // those through policy, and a code would be a second way in.
+    for (const id of ['sgp-setup-block', 'sgp-setup-block-a']) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = isManaged ? 'none' : 'block';
+    }
 
     applyLock();
   }
@@ -295,6 +351,12 @@
     $('sgp-enabled').checked = true;
     $('sgp-enabled').disabled = true;
     labelWithPro($('sgp-enabled'), 'Extension enabled', ' · ' + reason);
+    // The signed-in artboard carries its own copy of the same switch and was
+    // never in this list. The first toggle stays locked while this one stays
+    // live, so an employee flips pause from the second screen and the change
+    // handler writes it through the first.
+    const inToggle = document.getElementById('sgp-enabled-in');
+    if (inToggle) { inToggle.checked = true; inToggle.disabled = true; }
     $('sgp-cat-api').checked = true;
     $('sgp-cat-api').disabled = true;
     labelWithPro($('sgp-cat-api'), 'API keys and tokens', ' · ' + reason);
@@ -424,43 +486,54 @@
     };
   }
 
+  // Team configuration lives in the web console now, so the only control of
+  // this record still in the popup is Universal mode. Everything else is read
+  // back out of the org object the popup already loaded. The old version took
+  // all of it from controls that are no longer in the markup, which returned
+  // the inert stub's empty values and let one save wipe the org ID, turn team
+  // mode off and flip the three alert preferences to false.
   function collectOrg() {
     return {
-      teamMode: $('sgp-team-mode').checked,
-      orgId: $('sgp-org-id').value.trim(),
+      teamMode: !!org.teamMode,
+      orgId: String(org.orgId || '').trim(),
       orgToken: org.orgToken || '',
-      userEmail: $('sgp-user-email').value.trim(),
-      universalMode: $('sgp-universal-mode').checked,
-      extraEmails: $('sgp-extra-emails').value.trim(),
-      alertOnBlock: $('sgp-alert-block').checked,
-      alertOnSendAnyway: $('sgp-alert-send').checked,
-      alertOnWarn: $('sgp-alert-warn').checked,
+      userEmail: String(org.userEmail || '').trim(),
+      universalMode: !!$('sgp-universal-mode').checked,
+      extraEmails: String(org.extraEmails || '').trim(),
+      alertOnBlock: org.alertOnBlock !== false,
+      alertOnSendAnyway: org.alertOnSendAnyway !== false,
+      alertOnWarn: org.alertOnWarn !== false,
       alertOnRedact: org.alertOnRedact !== false,
       heartbeat: !!org.heartbeat,
       extraSites: org.extraSites || [],
       alertEndpoint: org.alertEndpoint || '',
       blockSendAnyway: !!org.blockSendAnyway,
-      // Managed installs send alerts to the worker only, so hidden channel
-      // fields are not collected and the stored config stays untouched
-      channels: isManaged ? (org.channels || {}) : {
-        slack: { enabled: $('sgp-ch-slack').checked, webhookUrl: $('sgp-slack-url').value.trim() },
-        teams: { enabled: $('sgp-ch-teams').checked, webhookUrl: $('sgp-teams-url').value.trim() },
-        telegram: { enabled: $('sgp-ch-telegram').checked, botToken: $('sgp-tg-token').value.trim(), chatId: $('sgp-tg-chat').value.trim() },
-        webhook: { enabled: $('sgp-ch-webhook').checked, url: $('sgp-webhook-url').value.trim() },
-        email: { enabled: $('sgp-ch-email').checked, apiKey: $('sgp-email-apikey').value.trim(), to: $('sgp-email-to').value.trim() },
-      },
+      // The channel fields left the popup with the rest of the team controls,
+      // so the stored config is carried forward as it is instead of being
+      // replaced by five empty channels read out of controls that are gone.
+      channels: org.channels || {},
     };
   }
 
   function save(cb) {
     const s = collectSettings();
+    const before = settings;
     settings = { ...settings, ...s };
     chrome.runtime.sendMessage({ type: 'saveSettings', settings: s }, (res) => {
+      if (res && res.locked) {
+        // rejected: the stored record never changed, so the in-memory copy must
+        // not claim otherwise. Only reachable in the window before applyLock()
+        // has run, which is why the answer gets said out loud instead of the
+        // toggle silently looking like it took.
+        settings = before;
+        showToast('Managed by your organization. Settings are read-only.');
+        render();
+      }
       if (typeof cb === 'function') cb(res);
     });
   }
 
-  function saveTeam() {
+  function saveTeam(silent) {
     const o = collectOrg();
     org = o;
     chrome.runtime.sendMessage({ type: 'saveOrg', org: o }, (res) => {
@@ -468,7 +541,9 @@
         chrome.runtime.sendMessage({ type: 'getSettings' }, (s) => {
           if (s) { entitled = !!s.entitled; isPro = !!s.isPro; }
           render();
-          showToast('Team settings saved');
+          // the setup-code flow runs this on the way through and has its own
+          // answer to give; two toasts here only ever buried the real one
+          if (!silent) showToast('Team settings saved');
         });
       } else if (res && res.locked) showToast('Managed by your organization. Settings are read-only.');
     });
@@ -526,30 +601,44 @@
     showToast('Patterns saved');
   });
 
-  $('sgp-apply-setup').addEventListener('click', async () => {
-    const raw = ($('sgp-setup-code').value || '').trim();
-    const res = await SGSetup.parse(raw);
-    if (!res.ok) { showToast(res.error); return; }
-    const obj = res.data;
-    if (obj.orgId) { org.orgId = obj.orgId; $('sgp-org-id').value = org.orgId; org.teamMode = true; $('sgp-team-mode').checked = true; $('sgp-team-fields').style.display = 'block'; }
-    if (obj.orgToken) org.orgToken = obj.orgToken;
-    if (obj.userEmail) { org.userEmail = obj.userEmail; $('sgp-user-email').value = org.userEmail; }
-    if (typeof obj.universalMode === 'boolean') { org.universalMode = obj.universalMode; $('sgp-universal-mode').checked = org.universalMode; }
-    if (Array.isArray(obj.extraSites)) org.extraSites = obj.extraSites;
-    if (typeof obj.heartbeat === 'boolean') org.heartbeat = obj.heartbeat;
-    if (typeof obj.blockSendAnyway === 'boolean') org.blockSendAnyway = obj.blockSendAnyway;
-    // Write the checkbox as well as the variable. collectSettings reads the
-    // DOM, so setting the local flag alone was overwritten by save() on the
-    // next line and an admin's autoRedact:true silently never applied.
-    if (typeof obj.autoRedact === 'boolean') { settings.autoRedact = obj.autoRedact; $('sgp-auto-redact').checked = obj.autoRedact; }
-    saveTeam();
-    save((res) => {
-      // Report what actually happened. The toast used to fire before either
-      // write, so a failed or half-applied code still said "Setup code applied."
-      if (res && res.ok) showToast('Setup code applied.');
-      else showToast('Setup code could not be applied. Check the settings below.', 'warn');
+  // Both artboards carry the field, so both get bound; only the input differs.
+  // The signed-out copy is the one a fresh machine actually has, because the
+  // code is what earns the entitlement that reveals the other artboard.
+  function bindSetupApply(buttonId, inputId) {
+    const btn = document.getElementById(buttonId);
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      const raw = ($(inputId).value || '').trim();
+      const res = await SGSetup.parse(raw);
+      if (!res.ok) { showToast(res.error); return; }
+      const obj = res.data;
+      // The org record is the source of truth: its team controls left the popup,
+      // so a setup code only has to update this object. Writing to the absent
+      // fields looked like it worked and was then read back crossed with every
+      // other absent field by collectOrg(). Only Universal mode and auto-redact
+      // are still checkboxes, and collectSettings reads those from the DOM.
+      if (obj.orgId) { org.orgId = obj.orgId; org.teamMode = true; }
+      if (obj.orgToken) org.orgToken = obj.orgToken;
+      if (obj.userEmail) org.userEmail = obj.userEmail;
+      if (typeof obj.universalMode === 'boolean') { org.universalMode = obj.universalMode; $('sgp-universal-mode').checked = org.universalMode; }
+      if (Array.isArray(obj.extraSites)) org.extraSites = obj.extraSites;
+      if (typeof obj.heartbeat === 'boolean') org.heartbeat = obj.heartbeat;
+      if (typeof obj.blockSendAnyway === 'boolean') org.blockSendAnyway = obj.blockSendAnyway;
+      // Write the checkbox as well as the variable. collectSettings reads the
+      // DOM, so setting the local flag alone was overwritten by save() on the
+      // next line and an admin's autoRedact:true silently never applied.
+      if (typeof obj.autoRedact === 'boolean') { settings.autoRedact = obj.autoRedact; $('sgp-auto-redact').checked = obj.autoRedact; }
+      saveTeam(true);
+      save((saved) => {
+        // Report what actually happened. The toast used to fire before either
+        // write, so a failed or half-applied code still said "Setup code applied."
+        if (saved && saved.ok) showToast('Setup code applied.');
+        else showToast('Setup code could not be applied. Check the settings below.', 'warn');
+      });
     });
-  });
+  }
+  bindSetupApply('sgp-apply-setup', 'sgp-setup-code');
+  bindSetupApply('sgp-apply-setup-a', 'sgp-setup-code-a');
 
   $('sgp-copy-diagnostics').addEventListener('click', () => {
     chrome.storage.local.get(['sg_license_key', 'sg_sync_status'], (st) => {
@@ -558,7 +647,7 @@
         version: chrome.runtime.getManifest().version,
         isPro: !!isPro,
         licenseInvalid: !!licenseInvalid,
-        license: k ? k.slice(0, 3) + '...' + k.slice(-4) : '(none stored)',
+        license: k ? '(stored)' : '(none stored)',
         enabled: !!settings.enabled,
         categories: settings.categories,
         autoRedact: !!settings.autoRedact,
@@ -682,12 +771,23 @@
     });
 
     on('sgp-signout', () => {
-      chrome.storage.local.remove(['sg_license_key', 'sg_isPro', 'sg_account_email', 'sg_license_invalid', 'sg_entitlement'], () => {
-        isPro = false;
-        licenseInvalid = false;
-        accountEmail = '';
-        render();
-        licenseStatus('Signed out.', 'ok');
+      // The seat licence belongs to whoever owns the machine. Signing out
+      // drops sg_isPro and sg_license_key while the org record stays, leaving
+      // an enrollment with no way back to Pro except a key this machine no
+      // longer has. Local flags first, then confirm with the worker: this can
+      // fire in the window before applyLock() has populated lockState.
+      const refuse = () => showToast('Managed by your organization. Ask your administrator to change this.');
+      if (lockState || isManaged) { refuse(); return; }
+      chrome.runtime.sendMessage({ type: 'getManagedState' }, (r) => {
+        const managed = !chrome.runtime.lastError && !!(r && r.managed);
+        if (managed) { refuse(); return; }
+        chrome.storage.local.remove(['sg_license_key', 'sg_isPro', 'sg_account_email', 'sg_license_invalid', 'sg_entitlement'], () => {
+          isPro = false;
+          licenseInvalid = false;
+          accountEmail = '';
+          render();
+          licenseStatus('Signed out.', 'ok');
+        });
       });
     });
 
@@ -772,12 +872,24 @@
     });
   });
 
+  // The daily alarm revalidates on its own; this is the prompt version, so the
+  // popup reports a revocation as soon as it happens. It used to run on every
+  // single popup open, which is a pointless round-trip when the same popup is
+  // closed and reopened inside a few minutes. Five minutes still answers on
+  // the first open after any real gap, so revocation is not delayed in
+  // practice, and an offline answer records nothing so the next open retries.
+  const REVERIFY_MIN_MS = 5 * 60 * 1000;
   function reverifyLicense() {
     chrome.storage.local.get(['sg_license_key'], (res) => {
       if (!res.sg_license_key) return;
+      // always repopulate the field, even on a throttled open
       $('sgp-license-key').value = res.sg_license_key;
+      let last = 0;
+      try { last = Number(window.localStorage.getItem('aki_last_reverify')) || 0; } catch (e) {}
+      if (Date.now() - last < REVERIFY_MIN_MS) return;
       chrome.runtime.sendMessage({ type: 'reverifyLicense' }, (r) => {
         if (!r || r.valid === null) return; // offline: leave state untouched
+        try { window.localStorage.setItem('aki_last_reverify', String(Date.now())); } catch (e) {}
         if (r.valid) {
           const wasInvalid = licenseInvalid;
           isPro = true;

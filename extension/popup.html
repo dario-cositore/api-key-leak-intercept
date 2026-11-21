@@ -20,7 +20,7 @@
 
   <main class="sc">
 
-    <div class="hero" id="sgp-hero" style="margin-top:16px">
+    <div class="hero" id="sgp-hero" style="margin-top:8px">
       <div class="dial">
           <svg class="ring" width="148" height="148" viewBox="0 0 148 148" fill="none" stroke-width="6" stroke-linecap="round" role="img" aria-label="Protection status">
             <g transform="rotate(-90 74 74)">
@@ -55,6 +55,18 @@
       <div class="row is-static">
         <span class="row-main">API keys and tokens<span class="sub">OpenAI, Anthropic, AWS, GitHub and more</span></span>
         <span class="ok" id="sgp-covered-check"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#1D1D1F" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+      </div>
+    </div>
+
+    <!-- Enrollment lives on the signed-out artboard because the setup code is
+         what earns the team entitlement that unlocks the signed-in one. A fresh
+         machine has nowhere else to paste it: the field used to exist only
+         behind an org you could not have yet. -->
+    <div id="sgp-setup-block-a" style="display:none">
+      <div class="lab">Setup <span class="chip chip-mini">Team</span></div>
+      <div class="card card-pad" style="display:flex;gap:8px">
+        <input type="text" class="input mono" id="sgp-setup-code-a" placeholder="Paste setup code" spellcheck="false" aria-label="Setup code" style="flex:1;min-width:0">
+        <button class="btn-fill" type="button" id="sgp-apply-setup-a">Apply</button>
       </div>
     </div>
 
@@ -155,6 +167,7 @@
     </div>
 
     <div class="lab">Last catch</div>
+    <div class="card card-pad catch-empty" id="sgp-event-empty">Nothing caught yet. The next one will land here.</div>
     <div class="card card-pad" id="sgp-event-in" style="display:none">
       <div class="catch-head">
         <span class="catch-type" id="sgp-event-type-in"></span>
@@ -189,7 +202,7 @@
       <label class="row"><span class="row-main">Universal mode<span class="sub">Scan every site, not only AI chats</span></span><input class="sw" type="checkbox" id="sgp-universal-mode"></label>
     </div>
 
-    <div id="sgp-setup-block">
+    <div id="sgp-setup-block" style="display:none">
       <div class="lab">Setup <span class="chip chip-mini">Team</span></div>
       <div class="card card-pad" style="display:flex;gap:8px">
         <input type="text" class="input mono" id="sgp-setup-code" placeholder="Paste setup code" spellcheck="false" aria-label="Setup code" style="flex:1;min-width:0">

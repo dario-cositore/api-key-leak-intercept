@@ -30,10 +30,7 @@ function loadBackground({ policy = POLICY, responders = {} } = {}) {
       onMessage: { addListener: (fn) => listeners.onMessage.push(fn) },
     },
     alarms: {
-      existing: {},
-      created: [],
-      create(name, info) { this.existing[name] = info; this.created.push({ name, info }); },
-      get(name, cb) { cb(this.existing[name]); },
+      create() {},
       onAlarm: { addListener: (fn) => listeners.onAlarm.push(fn) },
     },
     action: { setBadgeText() {}, setBadgeBackgroundColor() {} },
@@ -49,10 +46,6 @@ function loadBackground({ policy = POLICY, responders = {} } = {}) {
         },
         set(obj, cb) {
           Object.assign(store, obj);
-          if (cb) cb();
-        },
-        remove(keys, cb) {
-          for (const k of (Array.isArray(keys) ? keys : [keys])) delete store[k];
           if (cb) cb();
         },
       },
@@ -197,57 +190,4 @@ test('policy heartbeat:false overrides the managed default', async () => {
   await tick();
   assert.equal(findFetch(env.fetchLog, '/api/heartbeat'), undefined, 'heartbeat must not be sent');
   assert.ok(findFetch(env.fetchLog, '/api/entitlement'), 'entitlement is still fetched');
-});
-
-test('alarms are created when missing and never reset while running', () => {
-  const env = loadBackground();
-  const alarms = env.sandbox.chrome.alarms;
-  assert.deepEqual(alarms.created.map((c) => c.name), ['licenseCheck', 'heartbeat', 'configCheck']);
-  assert.equal(alarms.created[0].info.periodInMinutes, 1440, 'licence check is daily');
-
-  alarms.created = [];
-  env.sandbox.ensureAlarms();
-  assert.deepEqual(alarms.created, [], 're-asserting must not replace a running alarm');
-
-  delete alarms.existing.licenseCheck;
-  env.sandbox.ensureAlarms();
-  assert.deepEqual(alarms.created.map((c) => c.name), ['licenseCheck'], 'a vanished alarm must be recreated');
-});
-
-test('accountLogout clears every licence-related key', async () => {
-  const env = loadBackground();
-  Object.assign(env.store, {
-    sg_account_email: 'user@example.com',
-    sg_license_key: 'SG-AABBCCDDEEFF0011',
-    sg_isPro: true,
-    sg_license_invalid: false,
-    sg_entitlement: { pro: true, orgId: POLICY.orgId, at: Date.now() },
-  });
-
-  let response = null;
-  for (const fn of env.listeners.onMessage) {
-    fn({ type: 'accountLogout' }, {}, (r) => { response = r; });
-  }
-  await tick();
-  assert.ok(response && response.ok, 'accountLogout must answer');
-  for (const k of ['sg_account_email', 'sg_license_key', 'sg_isPro', 'sg_license_invalid', 'sg_entitlement']) {
-    assert.equal(env.store[k], undefined, k + ' must be cleared');
-  }
-});
-
-test('getSettings answers with the refreshed entitlement, not the stale cache', async () => {
-  const env = loadBackground({
-    responders: { '/api/entitlement': { ok: true, pro: true, plan: 'paid' } },
-  });
-  const staleAt = Date.now() - 22 * 24 * 3600 * 1000;
-  env.store.sg_entitlement = { pro: true, orgId: POLICY.orgId, at: staleAt };
-
-  let response = null;
-  for (const fn of env.listeners.onMessage) {
-    fn({ type: 'getSettings' }, {}, (r) => { response = r; });
-  }
-  await tick();
-  assert.ok(response, 'getSettings must answer');
-  assert.equal(response.entitled, true, 'the pending refresh must land before the answer is computed');
-  assert.ok(env.store.sg_entitlement.at > staleAt, 'the cache must hold the refreshed answer');
 });

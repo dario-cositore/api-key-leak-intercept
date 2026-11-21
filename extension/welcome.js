@@ -5,6 +5,26 @@
   var onView = document.getElementById('on-view');
   var status = document.getElementById('consent-status');
 
+  // The same shape background.js writes as its install defaults. The welcome
+  // tab is opened at background.js onInstalled *before* those defaults are
+  // stored, so Enable could land first and write {enabled:true} on its own;
+  // every other surface then read a settings record with no categories,
+  // customPatterns or autoRedact in it.
+  var DEFAULT_SETTINGS = {
+    categories: { apiKeys: true, pii: false, network: false },
+    customPatterns: [],
+    autoRedact: false,
+  };
+  function merged(stored) {
+    var s = Object.assign({}, DEFAULT_SETTINGS, stored || {});
+    // stored wins, but a partially written categories object still comes back
+    // complete
+    s.categories = Object.assign({}, DEFAULT_SETTINGS.categories, s.categories || {});
+    s.customPatterns = Array.isArray(s.customPatterns) ? s.customPatterns : [];
+    s.autoRedact = !!s.autoRedact;
+    return s;
+  }
+
   function showOn() {
     consent.style.display = 'none';
     onView.style.display = 'block';
@@ -19,7 +39,7 @@
   document.getElementById('enable-btn').addEventListener('click', function () {
     try {
       chrome.storage.local.get(['sg_settings'], function (res) {
-        var s = res.sg_settings || {};
+        var s = merged(res.sg_settings);
         s.enabled = true;
         chrome.storage.local.set({ sg_settings: s }, function () {
           showOn();

@@ -34,16 +34,25 @@
     // Patterns are case-insensitive: hand-typed or case-mangled keys must not
     // slip through (regression: "akiaiosfodnn7example" passed while the
     // uppercase form was caught).
-    { name: 'OpenAI API key', sev: 'high', cat: 'api', confidence: 'high', re: /\bsk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{20,}\b/i },
+    { name: 'OpenAI API key', sev: 'high', cat: 'api', confidence: 'high', re: /\bsk-(?!ant-|or-)(?:proj-)?[A-Za-z0-9_-]{20,200}\b/i },
     { name: 'Anthropic API key', sev: 'high', cat: 'api', confidence: 'high', re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/i },
-    { name: 'AWS Access Key ID', sev: 'high', cat: 'api', confidence: 'high', re: /\bAKIA[0-9A-Z]{16}\b/i },
+    { name: 'AWS Access Key ID', sev: 'high', cat: 'api', confidence: 'high', re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/i },
     // 40-char run, but not a plain hex string (git SHA-1 / hashes are hex).
     // The boundaries are lookarounds, not \b: \b sits between a word and a
     // non-word character, so a key that starts or ends with + or / could never
     // satisfy it and matched nothing at all. Roughly six percent of real AWS
     // secret keys are base64 of thirty bytes and end in one of those two.
-    { name: 'AWS Secret Access Key', sev: 'high', cat: 'api', confidence: 'low', re: /(?<![A-Za-z0-9/+=])(?![0-9a-fA-F]{40}(?![A-Za-z0-9/+=]))[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/, valid: (raw) => hasMixedClasses(raw) && shannon(raw) >= ENTROPY_MIN },
-    { name: 'GitHub token', sev: 'high', cat: 'api', confidence: 'high', re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/i },
+    // The leading lookbehind used to include '=', so a key written the normal
+    // way, AWS_SECRET_ACCESS_KEY=<secret>, could never start a match. '=' is
+    // the single most common character in front of an AWS secret, so the rule
+    // only blocks the base64 alphabet now. The trailing guard still stops a
+    // 40-char slice of a longer blob from matching.
+    { name: 'AWS Secret Access Key', sev: 'high', cat: 'api', confidence: 'low', re: /(?<![A-Za-z0-9/+])(?![0-9a-fA-F]{40}(?![A-Za-z0-9/+=]))[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/, valid: (raw) => hasMixedClasses(raw) && shannon(raw) >= ENTROPY_MIN },
+    // Fine-grained personal access tokens are a different shape, github_pat_
+    // then a long body. The old rule only knew the gh[pousr]_ family, so those
+    // came back as a low-confidence high-entropy token instead. One pattern
+    // keeps the pattern names unique, which the suite enforces.
+    { name: 'GitHub token', sev: 'high', cat: 'api', confidence: 'high', re: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/i },
     { name: 'Stripe secret key', sev: 'high', cat: 'api', confidence: 'high', re: /\bsk_(?:live|test)_[A-Za-z0-9]{24,}\b/i },
     { name: 'Stripe restricted key', sev: 'high', cat: 'api', confidence: 'high', re: /\brk_(?:live|test)_[A-Za-z0-9]{24,}\b/i },
     { name: 'Google API key', sev: 'high', cat: 'api', confidence: 'high', re: /\bAIza[0-9A-Za-z_-]{35}\b/i },
@@ -58,7 +67,7 @@
     { name: 'SendGrid API key', sev: 'high', cat: 'api', confidence: 'high', re: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/i },
     { name: 'Twilio API key', sev: 'high', cat: 'api', confidence: 'high', re: /\bSK[0-9a-fA-F]{32}\b/i },
     { name: 'JWT', sev: 'high', cat: 'api', confidence: 'high', re: /\beyJ[A-Za-z0-9_-]{1,200}\.eyJ[A-Za-z0-9_-]{1,200}\.[A-Za-z0-9_-]{1,200}\b/ },
-    { name: 'Private key (PEM)', sev: 'high', cat: 'api', confidence: 'high', re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/i },
+    { name: 'Private key (PEM)', sev: 'high', cat: 'api', confidence: 'high', re: /-----BEGIN (?:ENCRYPTED |RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/i },
     { name: 'Bearer token', sev: 'high', cat: 'api', confidence: 'high', re: /\bBearer\s+[A-Za-z0-9._-]{20,}\b/i },
     { name: 'Database connection string', sev: 'high', cat: 'api', confidence: 'high', re: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^\s:\/@]{0,100}:[^\s@]{1,100}@[^\s'"<>]{1,500}/i },
     { name: '.env file block', sev: 'high', cat: 'api', confidence: 'high', re: /(?<![^\n])[ \t]*[A-Z][A-Z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s,;()'"]+)[ \t]*\r?(?=\n|$)(?:\n[ \t]*[A-Z][A-Z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s,;()'"]+)[ \t]*\r?(?=\n|$)){2,}/ },
@@ -115,7 +124,7 @@
     { name: 'Singapore NRIC / FIN', sev: 'high', cat: 'pii', confidence: 'high', re: /\b[STFG]\d{7}[A-Z]\b/i, valid: validNric },
     { name: 'Indonesian NIK', sev: 'high', cat: 'pii', confidence: 'low', re: /\b\d{16}\b/, valid: validNik },
     // --- Network (Pro) ---
-    { name: 'IPv4 address', sev: 'low', cat: 'net', confidence: 'high', re: /\b(?:\d{1,3}\.){3}\d{1,3}\b/, valid: (raw) => !/^(?:0\.0\.0\.0|127\.)/.test(raw) },
+    { name: 'IPv4 address', sev: 'low', cat: 'net', confidence: 'high', re: /\b(?:\d{1,3}\.){3}\d{1,3}\b/, valid: (raw) => { const p = String(raw).split('.'); if (p.length !== 4 || p.some(s => !/^\d{1,3}$/.test(s) || Number(s) > 255)) return false; return !/^(?:0\.0\.0\.0|127\.)/.test(raw); } },
   ];
 
   /* ------------------------------------------------------------------ */
@@ -611,10 +620,27 @@
   // push one careless pattern to every seat, so the shape is refused here
   // rather than survived at match time. A malformed pattern is refused for the
   // same reason: quietly not matching beats freezing the page.
+  function looksLikeReDoS(src) {
+    // Quantified group that itself carries a quantifier, including after
+    // peeling innermost parentheses so ((a+))+ is caught as well as (a+)+.
+    // A quantified inner group is replaced with "x+" so the outer
+    // quantifier is still visible on the next pass.
+    const quantifiedNested = /\([^()]*(?:[+*]|\{\d+,?\d*\})[^()]*\)\s*(?:[+*]|\{\d+,?\d*\})/;
+    let s = String(src);
+    for (let i = 0; i < 20; i++) {
+      if (quantifiedNested.test(s)) return true;
+      const next = s.replace(/\([^()]*\)(?:[+*]|\{\d+,?\d*\})?/g, (m) => (
+        /(?:[+*]|\{\d+,?\d*\})/.test(m) ? 'x+' : 'x'
+      ));
+      if (next === s) break;
+      s = next;
+    }
+    return false;
+  }
+
   function compileCustomPattern(cp) {
     if (typeof cp !== 'string' || cp.length > 2000) return null;
-    // A quantified group that itself carries a quantifier: (a+)+, (\d*)*, (x{2,})+
-    if (/\([^()]*(?:[+*]|\{\d+,?\d*\})[^()]*\)\s*(?:[+*]|\{\d+,?\d*\})/.test(cp)) return null;
+    if (looksLikeReDoS(cp)) return null;
     try { return new RegExp(cp, 'g'); } catch (e) { return null; }
   }
 
@@ -648,9 +674,9 @@
     'IBAN': 4, 'Italian codice fiscale': 4, 'Italian partita IVA': 4,
     'Indian Aadhaar number': 4, 'Chinese resident ID': 4, 'Brazilian CPF': 4,
     'Canadian SIN / Australian TFN': 4, 'German tax ID (Steuer-ID)': 4,
-    'German VAT ID': 4, 'French NIR (social security)': 4, 'Spanish NIF/NIE': 4,
+    'German VAT ID': 4, 'Spanish NIF/NIE': 4,
     'Argentine CUIL': 4, 'Chilean RUT': 4, 'South African ID number': 4,
-    'Russian SNILS': 4, 'Turkish ID number': 4, 'South Korean resident number': 4,
+    'Turkish ID number': 4, 'South Korean resident number': 4,
     'Japanese My Number': 4, 'Dutch BSN': 4, 'Polish PESEL': 4,
     'Swedish personnummer': 4, 'Danish CPR number': 4, 'Norwegian fødselsnummer': 4,
     'Finnish hetu': 4, 'Irish PPS number': 4, 'Portuguese NIF': 4,
@@ -665,25 +691,38 @@
   };
   const rankOf = name => (name in RANK ? RANK[name] : 5);
 
+  // How much of the input the scan budget actually covered. The budget used
+  // to be invisible, so a paste larger than 1 MB came back as clean text with
+  // the secret at the end still in it. The caller needs the difference.
+  function budget(text) {
+    const s = String(text);
+    const total = s.length;
+    const scanned = Math.min(total, MAX_SCAN_TOTAL);
+    return { s: s, total: total, scanned: scanned, truncated: scanned < total };
+  }
+
   // Inputs are scanned in bounded windows so a 1 MB file is fully covered
   // while no single regex pass runs over more than MAX_SCAN_CHARS.
-  function eachWindow(text, visit) {
-    const s = String(text);
-    const total = Math.min(s.length, MAX_SCAN_TOTAL);
-    if (total <= MAX_SCAN_CHARS) {
-      visit(s.slice(0, total), 0);
+  function eachWindow(b, visit) {
+    if (b.scanned <= MAX_SCAN_CHARS) {
+      visit(b.s.slice(0, b.scanned), 0);
       return;
     }
-    for (let off = 0; off < total; off += MAX_SCAN_CHARS - WINDOW_OVERLAP) {
-      const end = Math.min(off + MAX_SCAN_CHARS, total);
-      visit(s.slice(off, end), off);
-      if (end >= total) break;
+    for (let off = 0; off < b.scanned; off += MAX_SCAN_CHARS - WINDOW_OVERLAP) {
+      const end = Math.min(off + MAX_SCAN_CHARS, b.scanned);
+      visit(b.s.slice(off, end), off);
+      if (end >= b.scanned) break;
     }
   }
 
-  function scan(text, opts) {
+  // scanReport is the honest version of scan: it also says how much of the
+  // input was covered and whether the finding cap stopped the scan early.
+  function scanReport(text, opts) {
     const o = { ...DEFAULT_OPTS, ...(opts || {}) };
-    if (!text || !o.enabled) return [];
+    const b = budget(text);
+    if (!b.total || !o.enabled) {
+      return { findings: [], totalChars: b.total, scannedChars: 0, truncated: false, hitCap: false };
+    }
     const hits = [];
     let done = false;
     const add = (name, sev, raw, start, preview, confidence) => {
@@ -698,7 +737,7 @@
     const out = () => hits
       .sort((a, b) => a.start - b.start)
       .map(({ name, sev, preview, raw, start, end, confidence }) => ({ name, sev, preview, raw, start, end, confidence }));
-    eachWindow(text, (s, off) => {
+    eachWindow(b, (s, off) => {
       if (done) return;
       // Built-in patterns
       for (const p of PATTERNS) {
@@ -730,7 +769,17 @@
         }
       }
     });
-    return out();
+    return {
+      findings: out(),
+      totalChars: b.total,
+      scannedChars: b.scanned,
+      truncated: b.truncated,
+      hitCap: done,
+    };
+  }
+
+  function scan(text, opts) {
+    return scanReport(text, opts).findings;
   }
 
   const TEXT_FILE_EXT_RE = /(?:^|\.)(txt|md|json|env|csv|log|yml|yaml|toml|ini|js|ts|py|sh)$/i;
@@ -783,6 +832,14 @@
     const highOnly = !!redactOpts.highOnly;
     const o = { ...DEFAULT_OPTS, ...(opts || {}) };
     const full = String(text);
+    const b = budget(text);
+    // The same gate scanReport applies. Detection is off, so there is nothing
+    // to redact and the original text is the right answer -- without this the
+    // two entry points disagreed, scan said clean and redact still rewrote the
+    // message (redact('...', {enabled:false}) returned count 1).
+    if (!o.enabled) {
+      return { text: full, count: 0, totalChars: b.total, scannedChars: 0, truncated: false };
+    }
     const spans = [];
     const addSpan = (name, sev, raw, start, confidence) => {
       const rank = rankOf(name);
@@ -793,7 +850,7 @@
       for (const h of taken) spans.splice(spans.indexOf(h), 1);
       spans.push({ name, sev, raw, start, end, rank, confidence: confidence || 'high' });
     };
-    eachWindow(full, (s, off) => {
+    eachWindow(b, (s, off) => {
       // Built-in patterns
       for (const p of PATTERNS) {
         if (!categoryAllowed(p, o)) continue;
@@ -849,12 +906,19 @@
       last = sp.end;
     }
     result += full.slice(last);
-    return { text: result, count: filtered.length };
+    return {
+      text: result,
+      count: filtered.length,
+      totalChars: b.total,
+      scannedChars: b.scanned,
+      truncated: b.truncated,
+    };
   }
 
   const api = {
     PATTERNS,
     redact,
+    scanReport,
     MAX_SCAN_CHARS,
     MAX_SCAN_TOTAL,
     MAX_FINDINGS,
