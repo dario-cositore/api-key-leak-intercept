@@ -18,3 +18,9 @@ tests/manual.html
 tests/MANUAL_MATRIX.md
 .dev.vars
 .wrangler/
+
+# Defense in depth: never commit secrets/keys/env files
+*.pem
+*.key
+.env*
+.env
